@@ -35,7 +35,7 @@ if uploaded_file:
         "ContainerLength",
         "ContainerWidth",
         "ContainerHeight",
-        "ContainerWeight",
+        "GrossWeight",
     ]
     if not all(col in df_catalog.columns for col in required_cols):
         st.error(f"Excel file must contain columns: {', '.join(required_cols)}")
@@ -87,7 +87,7 @@ if uploaded_file:
                     * part_info["ContainerWidth"]
                     * part_info["ContainerHeight"]
                 )
-                line_weight = containers_needed * part_info["ContainerWeight"]
+                line_weight = containers_needed * part_info["GrossWeight"]
                 line_vol = containers_needed * box_vol
 
                 total_weight_kg += line_weight
