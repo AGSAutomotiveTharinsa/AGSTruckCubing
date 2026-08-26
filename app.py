@@ -93,7 +93,7 @@ if st.button("Check Truck Capacity", type="primary"):
                 * row["ContainerWidth"]
                 * row["ContainerHeight"]
             )
-            line_weight = containers_needed * row["ContainerWeight"]
+            line_weight = containers_needed * row["GrossWeight"]
             line_vol = containers_needed * box_vol
 
             total_weight_kg += line_weight
