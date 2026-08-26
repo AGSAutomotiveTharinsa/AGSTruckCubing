@@ -7,7 +7,7 @@ import streamlit as st
 st.set_page_config(
     page_title="Truck Load & 3D Packing Calculator", layout="wide"
 )
-st.title("🚚 Manufacturing Truck Load & 3D Bin Packing Calculator")
+st.title("🚚 Trailer Optimization")
 
 # --- CONSTANTS (Trailer Specs) ---
 TRAILER_LENGTH = 636.0  # inches (X-axis)
