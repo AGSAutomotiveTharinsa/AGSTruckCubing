@@ -4,67 +4,96 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Truck Capacity Calculator", layout="wide")
-st.title("Truck Capacity & Load Calculator")
 
-CATALOG_FILE = "PartsCatalog.xlsx"  # Path inside your GitHub repo
+st.title("🚛 Truck Capacity & Load Calculator")
+st.markdown(
+    "Enter quantities directly in the catalog table below to calculate truck utilization."
+)
 
-# Load catalog automatically from the repo
+CATALOG_FILE = "PartsCatalog.xlsx"
+
+# Constants for Truck Specs
+TRUCK_MAX_WEIGHT_KG = 18824.083
+TRUCK_LENGTH, TRUCK_WIDTH, TRUCK_HEIGHT = 636.0, 102.0, 110.0
+USABLE_VOL_LIMIT = (TRUCK_LENGTH * TRUCK_WIDTH * TRUCK_HEIGHT) * 0.85
+
+
+# Load catalog automatically from GitHub repo
 @st.cache_data
 def load_catalog():
     if os.path.exists(CATALOG_FILE):
         return pd.read_excel(CATALOG_FILE)
     else:
+        # Fallback to CSV if xlsx isn't present
+        csv_file = CATALOG_FILE.replace(".xlsx", ".csv")
+        if os.path.exists(csv_file):
+            return pd.read_csv(csv_file)
         st.error(f"Catalog file '{CATALOG_FILE}' not found in repository!")
         st.stop()
 
 
 df_catalog = load_catalog()
 
-# 1. Multi-Select Part Selector
-selected_parts = st.multiselect(
-    "Select Parts for this Shipment:", options=df_catalog["PartName"].unique()
+# Prepare table for user quantity input
+if "Quantity" not in df_catalog.columns:
+    df_catalog.insert(1, "Quantity", 0)
+
+st.subheader("📋 Parts Catalog (Enter Quantities)")
+
+# Data Editor allows editing quantities directly in the grid
+edited_df = st.data_editor(
+    df_catalog,
+    column_config={
+        "Quantity": st.column_config.NumberColumn(
+            "Shipment Qty",
+            help="Type the number of parts to ship",
+            min_value=0,
+            step=1,
+            default=0,
+        ),
+        "PartName": st.column_config.TextColumn("Part Name", disabled=True),
+        "MaxPartsPerContainer": st.column_config.NumberColumn(
+            "Max Parts/Box", disabled=True
+        ),
+        "ContainerWeight": st.column_config.NumberColumn(
+            "Box Weight (kg)", disabled=True
+        ),
+    },
+    disabled=[
+        "PartName",
+        "MaxPartsPerContainer",
+        "ContainerLength",
+        "ContainerWidth",
+        "ContainerHeight",
+        "ContainerWeight",
+    ],
+    hide_index=True,
+    use_container_width=True,
 )
 
-if selected_parts:
-    st.subheader("📋 Enter Quantities")
+# Calculate Button
+if st.button("Check Truck Capacity", type="primary"):
+    # Filter only parts where quantity > 0
+    selected_items = edited_df[edited_df["Quantity"] > 0]
 
-    shipment_data = []
-    with st.form("quantities_form"):
-        for part in selected_parts:
-            part_row = df_catalog[df_catalog["PartName"] == part].iloc[0]
-            qty = st.number_input(
-                label=f"Quantity for {part} (Max {part_row['MaxPartsPerContainer']} per container):",
-                min_value=1,
-                value=10,
-                step=1,
-            )
-            shipment_data.append({"PartName": part, "Quantity": qty})
-
-        calculate_btn = st.form_submit_button("Calculate Truck Load")
-
-    # 2. Perform Calculations
-    if calculate_btn:
-        TRUCK_MAX_WEIGHT_KG = 18824.083
-        USABLE_VOL_LIMIT = (636.0 * 102.0 * 110.0) * 0.85
-
+    if selected_items.empty:
+        st.warning("Please enter a quantity greater than 0 for at least one part.")
+    else:
         total_weight_kg = 0.0
         total_volume_cu_in = 0.0
         manifest_summary = []
 
-        for item in shipment_data:
-            part_name = item["PartName"]
-            qty = item["Quantity"]
-            part_info = df_catalog[df_catalog["PartName"] == part_name].iloc[0]
+        for _, row in selected_items.iterrows():
+            qty = row["Quantity"]
+            max_per_box = row["MaxPartsPerContainer"]
+            containers_needed = math.ceil(qty / max_per_box)
 
-            containers_needed = math.ceil(
-                qty / part_info["MaxPartsPerContainer"]
-            )
             box_vol = (
-                part_info["ContainerLength"]
-                * part_info["ContainerWidth"]
-                * part_info["ContainerHeight"]
+                row["ContainerLength"]
+                * row["ContainerWidth"]
+                * row["ContainerHeight"]
             )
-            line_weight = containers_needed * part_info["ContainerWeight"]
+            line_weight = containers_needed * row["ContainerWeight"]
             line_vol = containers_needed * box_vol
 
             total_weight_kg += line_weight
@@ -72,22 +101,25 @@ if selected_parts:
 
             manifest_summary.append(
                 {
-                    "Part Name": part_name,
-                    "Part Qty": qty,
+                    "Part Name": row["PartName"],
+                    "Quantity": qty,
                     "Containers": containers_needed,
                     "Total Weight (kg)": line_weight,
                     "Total Vol (cu in)": line_vol,
                 }
             )
 
-        # Display Results
-        st.subheader("📦 Load Summary")
+        # 1. Summary Table of Active Items
+        st.subheader("📦 Manifest Load Breakdown")
         st.dataframe(pd.DataFrame(manifest_summary), use_container_width=True)
 
+        # 2. Capacity Gauges
         weight_pct = (total_weight_kg / TRUCK_MAX_WEIGHT_KG) * 100
         volume_pct = (total_volume_cu_in / USABLE_VOL_LIMIT) * 100
 
+        st.divider()
         col1, col2 = st.columns(2)
+
         with col1:
             st.metric(
                 "Total Weight",
@@ -95,6 +127,7 @@ if selected_parts:
                 f"{weight_pct:.1f}% limit",
             )
             st.progress(min(weight_pct / 100, 1.0))
+
         with col2:
             st.metric(
                 "Usable Volume Used",
@@ -103,10 +136,19 @@ if selected_parts:
             )
             st.progress(min(volume_pct / 100, 1.0))
 
+        # 3. Status Verdict
         if (
             total_weight_kg > TRUCK_MAX_WEIGHT_KG
             or total_volume_cu_in > USABLE_VOL_LIMIT
         ):
             st.error("🚨 TRUCK OVERLOADED / FULL!")
+            if total_weight_kg > TRUCK_MAX_WEIGHT_KG:
+                st.write(
+                    f"- **Weight Exceeded by:** {total_weight_kg - TRUCK_MAX_WEIGHT_KG:,.2f} kg"
+                )
+            if total_volume_cu_in > USABLE_VOL_LIMIT:
+                st.write(
+                    f"- **Volume Exceeded by:** {total_volume_cu_in - USABLE_VOL_LIMIT:,.0f} cu in"
+                )
         else:
             st.success("✅ TRUCK OK - Load fits safely within limits.")
