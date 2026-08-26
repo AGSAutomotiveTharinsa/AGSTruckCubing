@@ -3,97 +3,95 @@ import os
 import pandas as pd
 import streamlit as st
 
+# Configure page layout
 st.set_page_config(page_title="Truck Capacity Calculator", layout="wide")
 
 st.title("🚛 Truck Capacity & Load Calculator")
 st.markdown(
-    "Enter quantities directly in the catalog table below to calculate truck utilization."
+    "Select items and calculate truck space/weight utilization based on the repository catalog."
 )
+
+# Constants for Truck Specs
+TRUCK_LENGTH = 636.0  # inches
+TRUCK_WIDTH = 102.0  # inches
+TRUCK_HEIGHT = 110.0  # inches
+TRUCK_MAX_WEIGHT_KG = 18824.083
+TRUCK_TOTAL_VOL_CU_IN = TRUCK_LENGTH * TRUCK_WIDTH * TRUCK_HEIGHT
+USABLE_VOL_LIMIT = TRUCK_TOTAL_VOL_CU_IN * 0.85  # 85% volumetric fill efficiency
 
 CATALOG_FILE = "PartsCatalog.xlsx"
 
-# Constants for Truck Specs
-TRUCK_MAX_WEIGHT_KG = 18824.083
-TRUCK_LENGTH, TRUCK_WIDTH, TRUCK_HEIGHT = 636.0, 102.0, 110.0
-USABLE_VOL_LIMIT = (TRUCK_LENGTH * TRUCK_WIDTH * TRUCK_HEIGHT) * 0.85
 
-
-# Load catalog automatically from GitHub repo
+# Automatically load catalog from repository
 @st.cache_data
 def load_catalog():
     if os.path.exists(CATALOG_FILE):
         return pd.read_excel(CATALOG_FILE)
     else:
-        # Fallback to CSV if xlsx isn't present
-        csv_file = CATALOG_FILE.replace(".xlsx", ".csv")
-        if os.path.exists(csv_file):
-            return pd.read_csv(csv_file)
         st.error(f"Catalog file '{CATALOG_FILE}' not found in repository!")
         st.stop()
 
 
 df_catalog = load_catalog()
 
-# Prepare table for user quantity input
-if "Quantity" not in df_catalog.columns:
-    df_catalog.insert(1, "Quantity", 0)
+# Validate required columns
+required_cols = [
+    "PartName",
+    "MaxPartsPerContainer",
+    "ContainerLength",
+    "ContainerWidth",
+    "ContainerHeight",
+    "ContainerWeight",
+]
+if not all(col in df_catalog.columns for col in required_cols):
+    st.error(f"Excel file must contain columns: {', '.join(required_cols)}")
+    st.stop()
 
-st.subheader("📋 Parts Catalog (Enter Quantities)")
-
-# Data Editor allows editing quantities directly in the grid
-edited_df = st.data_editor(
-    df_catalog,
-    column_config={
-        "Quantity": st.column_config.NumberColumn(
-            "Shipment Qty",
-            help="Type the number of parts to ship",
-            min_value=0,
-            step=1,
-            default=0,
-        ),
-        "PartName": st.column_config.TextColumn("Part Name", disabled=True),
-        "MaxPartsPerContainer": st.column_config.NumberColumn(
-            "Max Parts/Box", disabled=True
-        ),
-        "ContainerWeight": st.column_config.NumberColumn(
-            "Box Weight (kg)", disabled=True
-        ),
-    },
-    disabled=[
-        "PartName",
-        "MaxPartsPerContainer",
-        "ContainerLength",
-        "ContainerWidth",
-        "ContainerHeight",
-        "ContainerWeight",
-    ],
-    hide_index=True,
-    use_container_width=True,
+# 2. Multi-Select Part Selector
+selected_parts = st.multiselect(
+    "Select Parts for this Shipment:", options=df_catalog["PartName"].unique()
 )
 
-# Calculate Button
-if st.button("Check Truck Capacity", type="primary"):
-    # Filter only parts where quantity > 0
-    selected_items = edited_df[edited_df["Quantity"] > 0]
+if selected_parts:
+    st.subheader("📋 Enter Quantities")
 
-    if selected_items.empty:
-        st.warning("Please enter a quantity greater than 0 for at least one part.")
-    else:
+    # Create a form to input quantities per part
+    shipment_data = []
+    with st.form("quantities_form"):
+        for part in selected_parts:
+            part_row = df_catalog[df_catalog["PartName"] == part].iloc[0]
+            qty = st.number_input(
+                label=f"Quantity for {part} (Max {part_row['MaxPartsPerContainer']} per container):",
+                min_value=1,
+                value=10,
+                step=1,
+            )
+            shipment_data.append({"PartName": part, "Quantity": qty})
+
+        calculate_btn = st.form_submit_button("Calculate Truck Load")
+
+    # 3. Perform Calculations
+    if calculate_btn:
         total_weight_kg = 0.0
         total_volume_cu_in = 0.0
+
         manifest_summary = []
 
-        for _, row in selected_items.iterrows():
-            qty = row["Quantity"]
-            max_per_box = row["MaxPartsPerContainer"]
+        for item in shipment_data:
+            part_name = item["PartName"]
+            qty = item["Quantity"]
+            part_info = df_catalog[df_catalog["PartName"] == part_name].iloc[0]
+
+            # Calculations
+            max_per_box = part_info["MaxPartsPerContainer"]
             containers_needed = math.ceil(qty / max_per_box)
 
             box_vol = (
-                row["ContainerLength"]
-                * row["ContainerWidth"]
-                * row["ContainerHeight"]
+                part_info["ContainerLength"]
+                * part_info["ContainerWidth"]
+                * part_info["ContainerHeight"]
             )
-            line_weight = containers_needed * row["GrossWeight"]
+            line_weight = containers_needed * part_info["ContainerWeight"]
             line_vol = containers_needed * box_vol
 
             total_weight_kg += line_weight
@@ -101,19 +99,19 @@ if st.button("Check Truck Capacity", type="primary"):
 
             manifest_summary.append(
                 {
-                    "Part Name": row["PartName"],
-                    "Quantity": qty,
+                    "Part Name": part_name,
+                    "Part Qty": qty,
                     "Containers": containers_needed,
                     "Total Weight (kg)": line_weight,
                     "Total Vol (cu in)": line_vol,
                 }
             )
 
-        # 1. Summary Table of Active Items
-        st.subheader("📦 Manifest Load Breakdown")
+        # Display Manifest Table
+        st.subheader("📦 Load Summary")
         st.dataframe(pd.DataFrame(manifest_summary), use_container_width=True)
 
-        # 2. Capacity Gauges
+        # Capacity Evaluation
         weight_pct = (total_weight_kg / TRUCK_MAX_WEIGHT_KG) * 100
         volume_pct = (total_volume_cu_in / USABLE_VOL_LIMIT) * 100
 
@@ -136,7 +134,7 @@ if st.button("Check Truck Capacity", type="primary"):
             )
             st.progress(min(volume_pct / 100, 1.0))
 
-        # 3. Status Verdict
+        # Verdict Status
         if (
             total_weight_kg > TRUCK_MAX_WEIGHT_KG
             or total_volume_cu_in > USABLE_VOL_LIMIT
