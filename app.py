@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Truck Capacity Calculator", layout="wide")
-st.title("🚛 Truck Capacity & Load Calculator")
+st.title("Truck Capacity & Load Calculator")
 
 CATALOG_FILE = "PartsCatalog.xlsx"  # Path inside your GitHub repo
 
