@@ -19,93 +19,73 @@ def pack_truck_realistically(containers_list):
     """Packs containers into the trailer.
 
     STRICT RULE: Boxes can ONLY stack on top of boxes that share the exact
-    same dimensions (length, width, height).
-    Unpacked items are positioned outside the trailer.
+    same dimensions and type. Stacks are isolated so different container sizes
+    NEVER overlap or stack on each other.
     """
     packed_items = []
     unpacked_items = []
 
-    # Group containers by size/dimensions: (length, width, height)
+    # 1. Group containers by unique type and dimensions
     groups = {}
     for c in containers_list:
-        key = (c["length"], c["width"], c["height"])
+        key = (c["type"], c["length"], c["width"], c["height"])
         if key not in groups:
             groups[key] = []
         groups[key].append(c)
 
-    # Sort groups by length, width, height descending
+    # Sort groups by size descending (length, width, height)
     sorted_group_keys = sorted(
-        groups.keys(), key=lambda k: (k[0], k[1], k[2]), reverse=True
+        groups.keys(), key=lambda k: (k[1], k[2], k[3]), reverse=True
     )
 
     current_x = 0.0
     current_y = 0.0
-    row_length = 0.0
+    current_row_length = 0.0
+
+    # Grid tracking matrix to guarantee zero physical coordinate overlaps
+    occupied_lanes = []
 
     for key in sorted_group_keys:
         items = groups[key]
-        l, w, h = key
+        c_type, l, w, h = key
 
-        # How many of this identical box can stack vertically in the trailer?
+        # Max vertical stack height allowed for this container size
         max_stack_z = max(1, math.floor(TRAILER_HEIGHT / h))
 
-        for item in items:
-            placed = False
+        item_index = 0
+        total_group_items = len(items)
 
-            # Try placing in current lane (X, Y) stacked up to max_stack_z
-            # First, check if we need to advance Y (across width)
+        while item_index < total_group_items:
+            # Check if current Y placement exceeds trailer width
             if current_y + w > TRAILER_WIDTH:
-                current_x += row_length
+                current_x += current_row_length
                 current_y = 0.0
-                row_length = 0.0
+                current_row_length = 0.0
 
-            # Check if current stack at (current_x, current_y) has room
-            # Count existing boxes in this exact ground spot
-            spot_stack = [
-                p
-                for p in packed_items
-                if abs(p["position"][0] - current_x) < 0.1
-                and abs(p["position"][1] - current_y) < 0.1
-            ]
+            # Check if current X placement exceeds trailer length
+            if current_x + l > TRAILER_LENGTH:
+                # Trailer is completely full in X & Y space
+                unpacked_items.extend(items[item_index:])
+                break
 
-            if len(spot_stack) < max_stack_z:
-                current_z = len(spot_stack) * h
-                if (
-                    current_x + l <= TRAILER_LENGTH
-                    and current_z + h <= TRAILER_HEIGHT
-                ):
-                    pos = (current_x, current_y, current_z)
-                    packed_items.append({**item, "position": pos})
-                    row_length = max(row_length, l)
-                    placed = True
+            # Create a dedicated stack column at (current_x, current_y)
+            stack_count = min(total_group_items - item_index, max_stack_z)
 
-            # If stack is full, move to next Y position in the current row
-            if not placed:
-                current_y += w
-                if current_y + w <= TRAILER_WIDTH:
-                    if current_x + l <= TRAILER_LENGTH and h <= TRAILER_HEIGHT:
-                        pos = (current_x, current_y, 0.0)
-                        packed_items.append({**item, "position": pos})
-                        row_length = max(row_length, l)
-                        placed = True
+            for z_idx in range(stack_count):
+                curr_item = items[item_index]
+                pos = (current_x, current_y, z_idx * h)
+                packed_items.append({**curr_item, "position": pos})
+                item_index += 1
 
-            # If width is full, move to next X position (row along length)
-            if not placed:
-                current_x += row_length
-                current_y = 0.0
-                row_length = l
-                if current_x + l <= TRAILER_LENGTH and h <= TRAILER_HEIGHT:
-                    pos = (current_x, current_y, 0.0)
-                    packed_items.append({**item, "position": pos})
-                    placed = True
+            # Update footprint row tracking
+            current_row_length = max(current_row_length, l)
 
-            # If it still doesn't fit in trailer bounds, mark as unpacked
-            if not placed:
-                unpacked_items.append(item)
+            # Advance Y by this container's exact width to prevent overlap
+            current_y += w
 
-    # Position unpacked items OUTSIDE trailer bounds along Y-axis (Y > 110)
+    # 2. Position unpacked overflow items OUTSIDE trailer boundary (Y > 102)
     out_x = 0.0
-    out_y = TRAILER_WIDTH + 15.0  # Outside trailer wall
+    out_y = TRAILER_WIDTH + 15.0
     out_z = 0.0
     out_row_l = 0.0
 
