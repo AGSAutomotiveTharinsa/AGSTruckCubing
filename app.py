@@ -293,7 +293,7 @@ if st.button("Calculate Truck Load & Spatial Fit", type="primary"):
     st.subheader("3. 3D Spatial Layout & Unpacked Summary")
 
     # Split screen into Plot (left) and Unpacked List (right)
-    col_plot, col_unpacked = st.columns([7, 3])
+    col_plot, col_unpacked = st.columns([6, 4])
 
     with col_plot:
         fig_3d = plot_3d_truck(packed_items)
