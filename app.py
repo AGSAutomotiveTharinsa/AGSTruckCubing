@@ -253,7 +253,12 @@ df = pd.DataFrame(data)
 # Initialize session state dataframe for quantities if not present
 if "quantities_df" not in st.session_state:
     st.session_state.quantities_df = pd.DataFrame(
-        {"PartName": df["PartName"], "PartQuantity": 0}
+        {
+            "PartName": df["PartName"],
+            "ContainerType": df["ContainerType"],
+            "MaxPartsPerContainer": df["MaxPartsPerContainer"],
+            "PartQuantity": 0,
+        }
     )
 
 # --- CENTERED QUANTITY ENTRY SECTION ---
@@ -262,12 +267,12 @@ left_pad, center_col, right_pad = st.columns([1, 2, 1])
 with center_col:
     st.subheader("1. Enter Order Quantities")
 
-    # Displays only PartName and editable PartQuantity linked to session state
+    # Displays PartName, ContainerType, MaxPartsPerContainer, and editable PartQuantity
     edited_df = st.data_editor(
         st.session_state.quantities_df,
         key="data_editor",
         num_rows="fixed",
-        disabled=["PartName"],
+        disabled=["PartName", "ContainerType", "MaxPartsPerContainer"],
         use_container_width=True,
     )
 
@@ -361,19 +366,36 @@ if calculate_clicked:
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Containers", f"{total_requested} Units")
-    col2.metric(
-        "Gross Weight",
-        f"{total_weight:,.2f} kg",
-        delta=f"{MAX_WEIGHT_KG - total_weight:,.2f} kg margin",
-    )
+
+    # Enlarged Gross Weight Margin label underneath metric
+    weight_margin = MAX_WEIGHT_KG - total_weight
+    margin_color = "#28a745" if is_weight_ok else "#dc3545"
+    with col2:
+        st.metric("Gross Weight", f"{total_weight:,.2f} kg")
+        st.markdown(
+            f"<div style='margin-top: -12px; font-size: 15px; font-weight: 600; color: {margin_color};'>"
+            f"Margin: {weight_margin:,.2f} kg"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
     col3.metric("Usable Spatial Fill", f"{fill_percentage:.1f}%")
     col4.metric("Unpacked Containers", f"{unpacked_count} Units")
 
+    st.write("")  # Spacing
+
+    # Status breakdown logic
     if is_weight_ok and is_space_ok:
-        st.success("✅ **TRUCK STATUS: FIT** — All items fit within capacity.")
+        st.success("✅ **TRUCK STATUS: FIT** — All items fit within weight and space limits.")
     else:
+        reasons = []
+        if not is_weight_ok:
+            reasons.append(f"WEIGHT ({total_weight - MAX_WEIGHT_KG:,.2f} kg over limit)")
+        if not is_space_ok:
+            reasons.append(f"SPACE ({unpacked_count} containers could not fit)")
+
         st.error(
-            "⚠️ **TRUCK STATUS: OVERLOADED** — Exceeds weight or space limit."
+            f"⚠️ **TRUCK STATUS: OVERLOADED BY {' AND '.join(reasons)}**"
         )
 
     st.subheader("3. 3D Spatial Layout & Unpacked Summary")
