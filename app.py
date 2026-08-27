@@ -1,5 +1,7 @@
 import math
+import re
 import pandas as pd
+import pdfplumber
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -145,6 +147,8 @@ def plot_3d_truck(packed_items, fill_percentage):
                 k=k,
                 color=color_map[c_type],
                 opacity=1.0,
+                lighting=dict(ambient=0.8, diffuse=0.8),
+                flatshading=True,
                 name=f"{item['part_name']} ({c_type})",
                 hoverinfo="name",
             )
@@ -250,6 +254,43 @@ data = {
 
 df = pd.DataFrame(data)
 
+# Create a mapping helper column for base part names (first 9 chars)
+df["BasePartName"] = df["PartName"].str[:9]
+
+
+# --- PDF PARSING FUNCTION ---
+def extract_quantities_from_pdf(pdf_file):
+    """Extracts part quantities from invoice PDF based on 9-character matching."""
+    extracted_counts = {}
+
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if not text:
+                continue
+
+            for line in text.split("\n"):
+                # Matches patterns like: GM1100CBA  ...  2128
+                match = re.search(r"^([A-Z0-9\-]+).*?\s+(\d+)\s*$", line.strip())
+                if match:
+                    raw_part_name = match.group(1)
+                    qty = int(match.group(2))
+
+                    # Key on the first 9 characters only
+                    base_part = raw_part_name[:9]
+                    extracted_counts[base_part] = (
+                        extracted_counts.get(base_part, 0) + qty
+                    )
+
+    return extracted_counts
+
+
+# --- SIDEBAR PDF UPLOADER ---
+st.sidebar.header("Invoice Auto-Fill")
+pdf_file = st.sidebar.file_uploader("Upload AGS Invoice (PDF)", type=["pdf"])
+
+pdf_triggered_calc = False
+
 # Initialize session state dataframe for quantities if not present
 if "quantities_df" not in st.session_state:
     st.session_state.quantities_df = pd.DataFrame(
@@ -260,6 +301,25 @@ if "quantities_df" not in st.session_state:
             "PartQuantity": 0,
         }
     )
+
+# Handle PDF Upload Process
+if pdf_file is not None:
+    if (
+        "last_uploaded_pdf" not in st.session_state
+        or st.session_state.last_uploaded_pdf != pdf_file.name
+    ):
+        extracted_data = extract_quantities_from_pdf(pdf_file)
+
+        # Map extracted quantities matching the 9-character base part name
+        new_quantities = []
+        for p_name in df["PartName"]:
+            base = p_name[:9]
+            new_quantities.append(extracted_data.get(base, 0))
+
+        st.session_state.quantities_df["PartQuantity"] = new_quantities
+        st.session_state.last_uploaded_pdf = pdf_file.name
+        st.sidebar.success("Invoice quantities loaded automatically!")
+        pdf_triggered_calc = True
 
 # --- CENTERED QUANTITY ENTRY SECTION ---
 left_pad, center_col, right_pad = st.columns([1, 2, 1])
@@ -281,12 +341,16 @@ with center_col:
 
     with col_calc:
         calculate_clicked = st.button(
-            "Calculate Truck Load & Spatial Fit", type="primary", use_container_width=True
+            "Calculate Truck Load & Spatial Fit",
+            type="primary",
+            use_container_width=True,
         )
 
     with col_clear:
         if st.button("Clear Quantities", use_container_width=True):
             st.session_state.quantities_df["PartQuantity"] = 0
+            if "last_uploaded_pdf" in st.session_state:
+                del st.session_state["last_uploaded_pdf"]
             if "data_editor" in st.session_state:
                 del st.session_state["data_editor"]
             st.rerun()
@@ -296,11 +360,13 @@ st.session_state.quantities_df["PartQuantity"] = edited_df["PartQuantity"]
 df["PartQuantity"] = edited_df["PartQuantity"]
 
 # --- CALCULATION AND PLOTTING ---
-if calculate_clicked:
+if calculate_clicked or pdf_triggered_calc:
     selected_parts = df[df["PartQuantity"] > 0].copy()
 
     if selected_parts.empty:
-        st.warning("Please enter a quantity greater than 0 for at least one part.")
+        st.warning(
+            "Please enter a quantity greater than 0 for at least one part."
+        )
         st.stop()
 
     containers_to_pack = []
@@ -368,26 +434,14 @@ if calculate_clicked:
     col1.metric("Total Containers", f"{total_requested} Units")
 
     # Enlarged Gross Weight Margin label underneath metric
-    # Enlarged Gross Weight Margin label using custom HTML in the metric label
     weight_margin = MAX_WEIGHT_KG - total_weight
-    delta_color = "#28a745" if is_weight_ok else "#dc3545"
-    delta_arrow = "↓" if is_weight_ok else "↑"
-
+    margin_color = "#28a745" if is_weight_ok else "#dc3545"
     with col2:
-        st.metric(
-            label="Gross Weight",
-            value=f"{total_weight:,.2f} kg",
-            delta=f"{weight_margin:,.2f} kg margin",
-        )
+        st.metric("Gross Weight", f"{total_weight:,.2f} kg")
         st.markdown(
-            f"""
-            <style>
-            [data-testid="stMetricDelta"] {{
-                font-size: 16px !important;
-                font-weight: 600 !important;
-            }}
-            </style>
-            """,
+            f"<div style='margin-top: -12px; font-size: 15px; font-weight: 600; color: {margin_color};'>"
+            f"Margin: {weight_margin:,.2f} kg"
+            f"</div>",
             unsafe_allow_html=True,
         )
 
@@ -398,17 +452,19 @@ if calculate_clicked:
 
     # Status breakdown logic
     if is_weight_ok and is_space_ok:
-        st.success("✅ **TRUCK STATUS: FIT** — All items fit within weight and space limits.")
+        st.success(
+            "✅ **TRUCK STATUS: FIT** — All items fit within weight and space limits."
+        )
     else:
         reasons = []
         if not is_weight_ok:
-            reasons.append(f"WEIGHT ({total_weight - MAX_WEIGHT_KG:,.2f} kg over limit)")
+            reasons.append(
+                f"WEIGHT ({total_weight - MAX_WEIGHT_KG:,.2f} kg over limit)"
+            )
         if not is_space_ok:
             reasons.append(f"SPACE ({unpacked_count} containers could not fit)")
 
-        st.error(
-            f"⚠️ **TRUCK STATUS: OVERLOADED BY {' AND '.join(reasons)}**"
-        )
+        st.error(f"⚠️ **TRUCK STATUS: OVERLOADED BY {' AND '.join(reasons)}**")
 
     st.subheader("3. 3D Spatial Layout & Unpacked Summary")
 
