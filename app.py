@@ -20,7 +20,6 @@ def pack_truck_realistically(containers_list):
     packed_items = []
     unpacked_items = []
 
-    # Group containers strictly by Container Type & Dimensions (ignoring PartName)
     groups = {}
     for c in containers_list:
         key = (
@@ -33,7 +32,6 @@ def pack_truck_realistically(containers_list):
             groups[key] = []
         groups[key].append(c)
 
-    # Sort groups by footprint volume (largest base first)
     sorted_group_keys = sorted(
         groups.keys(), key=lambda k: (k[1], k[2], k[3]), reverse=True
     )
@@ -51,18 +49,15 @@ def pack_truck_realistically(containers_list):
         total_group_items = len(items)
 
         while item_index < total_group_items:
-            # Advance to next X-row when Y reaches trailer width
             if current_y + w > TRAILER_WIDTH:
                 current_x += current_row_length
                 current_y = 0.0
                 current_row_length = 0.0
 
-            # Stop if X exceeds trailer length
             if current_x + l > TRAILER_LENGTH:
                 unpacked_items.extend(items[item_index:])
                 break
 
-            # Stack items vertically up to max allowed height
             stack_count = min(total_group_items - item_index, max_stack_z)
 
             for z_idx in range(stack_count):
@@ -75,6 +70,7 @@ def pack_truck_realistically(containers_list):
             current_y += w
 
     return packed_items, unpacked_items
+
 
 def calculate_fill_percentage(containers_to_pack):
     """Calculates usable space utilization percentage."""
@@ -223,35 +219,45 @@ if missing_cols:
     st.error(f"Excel file missing required columns: {missing_cols}")
     st.stop()
 
-st.subheader("1. Enter Order Quantities")
-df["Quantity"] = 0
+# Initialize session state dataframe for quantities if not present
+if "quantities_df" not in st.session_state:
+    st.session_state.quantities_df = pd.DataFrame(
+        {"PartName": df["PartName"], "PartQuantity": 0}
+    )
 
+st.subheader("1. Enter Order Quantities")
+
+# Displays only PartName and editable PartQuantity linked to session state
 edited_df = st.data_editor(
-    df[
-        [
-            "PartName",
-            "ContainerType",
-            "MaxPartsPerContainer",
-            "ContainerWeight [kg]",
-            "Weight of 1 Part [kg]",
-            "Quantity",
-        ]
-    ],
+    st.session_state.quantities_df,
+    key="data_editor",
     num_rows="fixed",
-    disabled=[
-        "PartName",
-        "ContainerType",
-        "MaxPartsPerContainer",
-        "ContainerWeight [kg]",
-        "Weight of 1 Part [kg]",
-    ],
+    disabled=["PartName"],
     use_container_width=True,
 )
 
-df["Quantity"] = edited_df["Quantity"]
+# Update state dataframe with user edits
+st.session_state.quantities_df["PartQuantity"] = edited_df["PartQuantity"]
+df["PartQuantity"] = edited_df["PartQuantity"]
 
-if st.button("Calculate Truck Load & Spatial Fit", type="primary"):
-    selected_parts = df[df["Quantity"] > 0].copy()
+# --- BUTTON BAR ---
+col_calc, col_clear, _ = st.columns([3, 2, 5])
+
+with col_calc:
+    calculate_clicked = st.button(
+        "Calculate Truck Load & Spatial Fit", type="primary"
+    )
+
+with col_clear:
+    if st.button("Clear Quantities"):
+        st.session_state.quantities_df["PartQuantity"] = 0
+        if "data_editor" in st.session_state:
+            del st.session_state["data_editor"]
+        st.rerun()
+
+# --- CALCULATION AND PLOTTING ---
+if calculate_clicked:
+    selected_parts = df[df["PartQuantity"] > 0].copy()
 
     if selected_parts.empty:
         st.warning("Please enter a quantity greater than 0 for at least one part.")
@@ -261,7 +267,7 @@ if st.button("Calculate Truck Load & Spatial Fit", type="primary"):
     total_weight = 0.0
 
     for idx, row in selected_parts.iterrows():
-        qty = int(row["Quantity"])
+        qty = int(row["PartQuantity"])
         max_per_container = (
             int(row["MaxPartsPerContainer"])
             if not pd.isna(row["MaxPartsPerContainer"])
