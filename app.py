@@ -16,26 +16,26 @@ MAX_WEIGHT_KG = 18824.083  # kg
 
 # --- PACKING ALGORITHM ---
 def pack_truck_realistically(containers_list):
-    """Packs containers into the trailer with strict same-size vertical stacking."""
+    """Packs containers into the trailer, grouping by container dimensions so identical box types can stack together."""
     packed_items = []
     unpacked_items = []
 
+    # Group containers strictly by Container Type & Dimensions (ignoring PartName)
     groups = {}
     for c in containers_list:
         key = (
-            c["part_name"],
             c["type"],
             c["length"],
             c["width"],
             c["height"],
-            c["max_parts"],
         )
         if key not in groups:
             groups[key] = []
         groups[key].append(c)
 
+    # Sort groups by footprint volume (largest base first)
     sorted_group_keys = sorted(
-        groups.keys(), key=lambda k: (k[2], k[3], k[4]), reverse=True
+        groups.keys(), key=lambda k: (k[1], k[2], k[3]), reverse=True
     )
 
     current_x = 0.0
@@ -44,22 +44,25 @@ def pack_truck_realistically(containers_list):
 
     for key in sorted_group_keys:
         items = groups[key]
-        part_name, c_type, l, w, h, max_parts = key
+        c_type, l, w, h = key
 
         max_stack_z = max(1, math.floor(TRAILER_HEIGHT / h))
         item_index = 0
         total_group_items = len(items)
 
         while item_index < total_group_items:
+            # Advance to next X-row when Y reaches trailer width
             if current_y + w > TRAILER_WIDTH:
                 current_x += current_row_length
                 current_y = 0.0
                 current_row_length = 0.0
 
+            # Stop if X exceeds trailer length
             if current_x + l > TRAILER_LENGTH:
                 unpacked_items.extend(items[item_index:])
                 break
 
+            # Stack items vertically up to max allowed height
             stack_count = min(total_group_items - item_index, max_stack_z)
 
             for z_idx in range(stack_count):
@@ -72,7 +75,6 @@ def pack_truck_realistically(containers_list):
             current_y += w
 
     return packed_items, unpacked_items
-
 
 def calculate_fill_percentage(containers_to_pack):
     """Calculates usable space utilization percentage."""
