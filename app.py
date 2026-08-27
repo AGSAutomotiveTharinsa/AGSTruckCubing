@@ -188,36 +188,67 @@ def plot_3d_truck(packed_items, fill_percentage):
     return fig
 
 
-# --- MAIN APP INTERFACE ---
-uploaded_file = st.sidebar.file_uploader(
-    "Upload Excel Data (Parts Manifest)", type=["xlsx"]
-)
+# --- HARDCODED MANIFEST DATA ---
+data = {
+    "PartName": [
+        "GM1121ACA", "GM1122ACA", "GM286YBA", "GM286EBA", "GM286FBA",
+        "GM1100CBA", "GM1100DBA", "GM1110CCA", "GM1110DCA", "FC1100JAA-STMP",
+        "FC1226CBA-WELD", "FC1226DBA-WELD", "FC1227ECA-WELD", "FC1227FCA-WELD",
+        "GM1123ABB", "GM1124ABB", "GM1130ECA", "GM1130FCA", "CV2440FAA",
+        "CV2440GAA", "GM2430UAA", "GM2430IAA", "GM2200EAA", "GM2200FAA"
+    ],
+    "ContainerType": [
+        "*PLA405", "*PLA405", "*GM5131", "*CC3A", "*CC3A",
+        "*AGS1091", "*AGS1091", "*AGS1091", "*AGS1091", "*AGS1010",
+        "*AGS1010", "*AGS1010", "*AGS1010", "*AGS1010", "*PLA405",
+        "*PLA405", "AGS1015", "AGS1015", "AGS1015", "AGS1015",
+        "AGS1015", "AGS1015", "AGS1015", "AGS1015"
+    ],
+    "ContainerLength [in]": [
+        48, 48, 54, 53, 53,
+        62, 62, 62, 62, 48,
+        48, 48, 48, 48, 48,
+        48, 48, 48, 48, 48,
+        48, 48, 48, 48
+    ],
+    "ContainerWidth": [
+        45, 45, 44, 42, 42,
+        48, 48, 48, 48, 45,
+        45, 45, 45, 45, 45,
+        45, 45, 45, 45, 45,
+        45, 45, 45, 45
+    ],
+    "ContainerHeight": [
+        53, 53, 40, 38, 38,
+        50, 50, 50, 50, 34,
+        34, 34, 34, 34, 53,
+        53, 25, 25, 25, 25,
+        25, 25, 25, 25
+    ],
+    "ContainerWeight [kg]": [
+        79.1, 79.1, 170.0, 173.0, 173.0,
+        256.8, 256.8, 256.8, 256.8, 181.8,
+        181.8, 181.8, 181.8, 181.8, 79.1,
+        79.1, 170.5, 170.5, 170.5, 170.5,
+        170.5, 170.5, 170.5, 170.5
+    ],
+    "MaxPartsPerContainer": [
+        192, 192, 350, 300, 300,
+        112, 112, 112, 112, 798,
+        48, 48, 450, 450, 144,
+        144, 800, 1000, 2000, 2000,
+        200, 200, 1008, 1008
+    ],
+    "Weight of 1 Part [kg]": [
+        0.68, 0.68, 0.92, 0.82, 0.82,
+        2.05, 2.05, 2.05, 2.05, 1.34,
+        3.98, 3.96, 1.96, 1.96, 0.68,
+        0.68, 0.27, 0.25, 0.23, 0.23,
+        0.23, 0.23, 0.40, 0.40
+    ]
+}
 
-if uploaded_file:
-    df = pd.read_excel(uploaded_file)
-    st.sidebar.success("Excel File Loaded Successfully!")
-else:
-    st.info("👈 Please upload your `PartsData.xlsx` file to begin.")
-    st.stop()
-
-# Flexibly check and strip bracket spaces if needed
-df.columns = df.columns.str.strip()
-
-required_cols = [
-    "PartName",
-    "ContainerType",
-    "ContainerLength [in]",
-    "ContainerWidth",
-    "ContainerHeight",
-    "ContainerWeight [kg]",
-    "MaxPartsPerContainer",
-    "Weight of 1 Part [kg]",
-]
-
-missing_cols = [col for col in required_cols if col not in df.columns]
-if missing_cols:
-    st.error(f"Excel file missing required columns: {missing_cols}")
-    st.stop()
+df = pd.DataFrame(data)
 
 # Initialize session state dataframe for quantities if not present
 if "quantities_df" not in st.session_state:
