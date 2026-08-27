@@ -14,16 +14,12 @@ TRAILER_HEIGHT = 110.0  # inches (Z-axis)
 MAX_WEIGHT_KG = 18824.083  # kg
 
 
-# --- STRICT SAME-SIZE STACKING PACKING ALGORITHM ---
+# --- PACKING ALGORITHM ---
 def pack_truck_realistically(containers_list):
-    """Packs containers into the trailer with strict same-size vertical stacking.
-
-    Returns packed items and unplaced items.
-    """
+    """Packs containers into the trailer with strict same-size vertical stacking."""
     packed_items = []
     unpacked_items = []
 
-    # Group containers by type and dimensions
     groups = {}
     for c in containers_list:
         key = (
@@ -38,7 +34,6 @@ def pack_truck_realistically(containers_list):
             groups[key] = []
         groups[key].append(c)
 
-    # Sort groups by size descending
     sorted_group_keys = sorted(
         groups.keys(), key=lambda k: (k[2], k[3], k[4]), reverse=True
     )
@@ -56,13 +51,11 @@ def pack_truck_realistically(containers_list):
         total_group_items = len(items)
 
         while item_index < total_group_items:
-            # Check width boundary
             if current_y + w > TRAILER_WIDTH:
                 current_x += current_row_length
                 current_y = 0.0
                 current_row_length = 0.0
 
-            # Check length boundary
             if current_x + l > TRAILER_LENGTH:
                 unpacked_items.extend(items[item_index:])
                 break
@@ -82,53 +75,29 @@ def pack_truck_realistically(containers_list):
 
 
 def calculate_fill_percentage(containers_to_pack):
-    """Calculates usable space utilization.
-
-    Usable volume for a container type = footprint * (max vertical boxes that fit * container height).
-    gaps between top boxes and ceiling are excluded from usable space capacity.
-    """
+    """Calculates usable space utilization percentage."""
     if not containers_to_pack:
         return 0.0
 
-    total_usable_truck_vol = 0.0
-    total_requested_vol = 0.0
+    total_requested_vol = sum(
+        c["length"] * c["width"] * c["height"] for c in containers_to_pack
+    )
 
-    # Group requested containers by dimensions
-    groups = {}
-    for c in containers_to_pack:
-        key = (c["length"], c["width"], c["height"])
-        groups[key] = groups.get(key, 0) + 1
-
-    for (l, w, h), count in groups.items():
-        box_vol = l * w * h
-        total_requested_vol += box_vol * count
-
-        # Max vertical boxes that fit under ceiling
-        max_stack_z = math.floor(TRAILER_HEIGHT / h)
-        usable_stack_height = max_stack_z * h
-
-        # Usable volume share based on floor footprint
-        floor_footprint = l * w
-        total_usable_truck_vol += floor_footprint * usable_stack_height
-
-    # Overall Usable Fill % (Total Requested Volume / Effective Max Stackable Volume)
-    # Using total trailer usable volume across footprint area
-    total_effective_usable_vol = TRAILER_LENGTH * TRAILER_WIDTH * TRAILER_HEIGHT
-    
-    # Calculate effective max usable volume by discounting top air gap per container type
-    avg_top_gap = sum((TRAILER_HEIGHT % c["height"]) for c in containers_to_pack) / len(containers_to_pack)
+    avg_top_gap = sum(
+        (TRAILER_HEIGHT % c["height"]) for c in containers_to_pack
+    ) / len(containers_to_pack)
     usable_height_capacity = TRAILER_HEIGHT - avg_top_gap
-    effective_usable_capacity = TRAILER_LENGTH * TRAILER_WIDTH * usable_height_capacity
+    effective_usable_capacity = (
+        TRAILER_LENGTH * TRAILER_WIDTH * usable_height_capacity
+    )
 
-    fill_pct = (total_requested_vol / effective_usable_capacity) * 100
-    return fill_pct
+    return (total_requested_vol / effective_usable_capacity) * 100
 
 
 def plot_3d_truck(packed_items, fill_percentage):
-    """Renders packed items and overlays the Usable Space Fullness % on top."""
+    """Renders 3D Plot of the trailer layout."""
     fig = go.Figure()
 
-    # Fixed Trailer Wireframe Boundary (Black Box)
     dx, dy, dz = TRAILER_LENGTH, TRAILER_WIDTH, TRAILER_HEIGHT
     fig.add_trace(
         go.Scatter3d(
@@ -141,7 +110,6 @@ def plot_3d_truck(packed_items, fill_percentage):
         )
     )
 
-    # Color mapping
     color_map = {}
     colors = [
         "royalblue",
@@ -184,7 +152,6 @@ def plot_3d_truck(packed_items, fill_percentage):
             )
         )
 
-    # Title Status Text
     status_color = "red" if fill_percentage > 100 else "green"
     status_label = "OVERLOADED" if fill_percentage > 100 else "CAPACITY OK"
 
@@ -235,17 +202,23 @@ else:
     st.info("👈 Please upload your `PartsData.xlsx` file to begin.")
     st.stop()
 
+# Flexibly check and strip bracket spaces if needed
+df.columns = df.columns.str.strip()
+
 required_cols = [
     "PartName",
-    "MaxPartsPerContainer",
     "ContainerType",
-    "ContainerLength",
+    "ContainerLength [in]",
     "ContainerWidth",
     "ContainerHeight",
-    "GrossWeight",
+    "ContainerWeight [kg]",
+    "MaxPartsPerContainer",
+    "Weight of 1 Part [kg]",
 ]
-if not all(col in df.columns for col in required_cols):
-    st.error(f"Excel file must contain columns: {required_cols}")
+
+missing_cols = [col for col in required_cols if col not in df.columns]
+if missing_cols:
+    st.error(f"Excel file missing required columns: {missing_cols}")
     st.stop()
 
 st.subheader("1. Enter Order Quantities")
@@ -257,7 +230,8 @@ edited_df = st.data_editor(
             "PartName",
             "ContainerType",
             "MaxPartsPerContainer",
-            "GrossWeight",
+            "ContainerWeight [kg]",
+            "Weight of 1 Part [kg]",
             "Quantity",
         ]
     ],
@@ -266,7 +240,8 @@ edited_df = st.data_editor(
         "PartName",
         "ContainerType",
         "MaxPartsPerContainer",
-        "GrossWeight",
+        "ContainerWeight [kg]",
+        "Weight of 1 Part [kg]",
     ],
     use_container_width=True,
 )
@@ -292,33 +267,44 @@ if st.button("Calculate Truck Load & Spatial Fit", type="primary"):
         )
         num_containers = math.ceil(qty / max_per_container)
 
-        unit_weight = (
-            row["GrossWeight"] if not pd.isna(row["GrossWeight"]) else 0.0
+        container_empty_weight = (
+            float(row["ContainerWeight [kg]"])
+            if not pd.isna(row["ContainerWeight [kg]"])
+            else 0.0
+        )
+        part_unit_weight = (
+            float(row["Weight of 1 Part [kg]"])
+            if not pd.isna(row["Weight of 1 Part [kg]"])
+            else 0.0
         )
 
         remaining_parts = qty
         for i in range(num_containers):
             parts_in_this_box = min(remaining_parts, max_per_container)
+
+            # Weight = (Parts Qty * Single Part Weight) + Empty Container Weight
+            box_gross_weight = container_empty_weight + (
+                parts_in_this_box * part_unit_weight
+            )
+
             containers_to_pack.append(
                 {
                     "part_name": str(row["PartName"]),
                     "name": f"{row['PartName']} (C{i+1})",
                     "type": str(row["ContainerType"]),
-                    "length": float(row["ContainerLength"]),
+                    "length": float(row["ContainerLength [in]"]),
                     "width": float(row["ContainerWidth"]),
                     "height": float(row["ContainerHeight"]),
-                    "weight": float(unit_weight),
+                    "weight": box_gross_weight,
                     "max_parts": max_per_container,
                     "parts_count": parts_in_this_box,
                 }
             )
-            total_weight += unit_weight
+            total_weight += box_gross_weight
             remaining_parts -= parts_in_this_box
 
-    # Run packing algorithm
+    # Run packing logic
     packed_items, unpacked_items = pack_truck_realistically(containers_to_pack)
-
-    # Fill percentage based strictly on usable vertical headroom
     fill_percentage = calculate_fill_percentage(containers_to_pack)
 
     total_requested = len(containers_to_pack)
@@ -344,7 +330,7 @@ if st.button("Calculate Truck Load & Spatial Fit", type="primary"):
         st.success("✅ **TRUCK STATUS: FIT** — All items fit within capacity.")
     else:
         st.error(
-            "⚠️ **TRUCK STATUS: OVERLOADED** — Some items cannot fit inside the trailer."
+            "⚠️ **TRUCK STATUS: OVERLOADED** — Exceeds weight or space limit."
         )
 
     st.subheader("3. 3D Spatial Layout & Unpacked Summary")
@@ -356,7 +342,7 @@ if st.button("Calculate Truck Load & Spatial Fit", type="primary"):
         st.plotly_chart(fig_3d, use_container_width=True)
 
     with col_unpacked:
-        st.markdown("### Unpacked Items")
+        st.markdown("### ⚠️ Unpacked Items")
         if unpacked_items:
             unpacked_df = pd.DataFrame(unpacked_items)
             summary = (
@@ -381,10 +367,18 @@ if st.button("Calculate Truck Load & Spatial Fit", type="primary"):
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "Part Name": st.column_config.TextColumn("Part Name", width="medium"),
-                    "Container Type": st.column_config.TextColumn("Type", width="small"),
-                    "Unpacked Containers": st.column_config.NumberColumn("Containers", width="small"),
-                    "Unpacked QTY": st.column_config.NumberColumn("Qty", width="small"),
+                    "Part Name": st.column_config.TextColumn(
+                        "Part Name", width="medium"
+                    ),
+                    "Container Type": st.column_config.TextColumn(
+                        "Type", width="small"
+                    ),
+                    "Unpacked Containers": st.column_config.NumberColumn(
+                        "Containers", width="small"
+                    ),
+                    "Unpacked QTY": st.column_config.NumberColumn(
+                        "Qty", width="small"
+                    ),
                 },
             )
         else:
