@@ -225,35 +225,39 @@ if "quantities_df" not in st.session_state:
         {"PartName": df["PartName"], "PartQuantity": 0}
     )
 
-st.subheader("1. Enter Order Quantities")
+# --- CENTERED QUANTITY ENTRY SECTION ---
+left_pad, center_col, right_pad = st.columns([1, 2, 1])
 
-# Displays only PartName and editable PartQuantity linked to session state
-edited_df = st.data_editor(
-    st.session_state.quantities_df,
-    key="data_editor",
-    num_rows="fixed",
-    disabled=["PartName"],
-    use_container_width=True,
-)
+with center_col:
+    st.subheader("1. Enter Order Quantities")
 
-# Update state dataframe with user edits
-st.session_state.quantities_df["PartQuantity"] = edited_df["PartQuantity"]
-df["PartQuantity"] = edited_df["PartQuantity"]
-
-# --- BUTTON BAR ---
-col_calc, col_clear, _ = st.columns([3, 2, 5])
-
-with col_calc:
-    calculate_clicked = st.button(
-        "Calculate Truck Load & Spatial Fit", type="primary"
+    # Displays only PartName and editable PartQuantity linked to session state
+    edited_df = st.data_editor(
+        st.session_state.quantities_df,
+        key="data_editor",
+        num_rows="fixed",
+        disabled=["PartName"],
+        use_container_width=True,
     )
 
-with col_clear:
-    if st.button("Clear Quantities"):
-        st.session_state.quantities_df["PartQuantity"] = 0
-        if "data_editor" in st.session_state:
-            del st.session_state["data_editor"]
-        st.rerun()
+    # --- BUTTON BAR ---
+    col_calc, col_clear = st.columns([3, 2])
+
+    with col_calc:
+        calculate_clicked = st.button(
+            "Calculate Truck Load & Spatial Fit", type="primary", use_container_width=True
+        )
+
+    with col_clear:
+        if st.button("Clear Quantities", use_container_width=True):
+            st.session_state.quantities_df["PartQuantity"] = 0
+            if "data_editor" in st.session_state:
+                del st.session_state["data_editor"]
+            st.rerun()
+
+# Sync inputs
+st.session_state.quantities_df["PartQuantity"] = edited_df["PartQuantity"]
+df["PartQuantity"] = edited_df["PartQuantity"]
 
 # --- CALCULATION AND PLOTTING ---
 if calculate_clicked:
