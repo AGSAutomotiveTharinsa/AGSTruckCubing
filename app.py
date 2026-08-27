@@ -259,6 +259,7 @@ df["BasePartName"] = df["PartName"].str[:9]
 
 
 # --- PDF PARSING FUNCTION ---
+# --- IMPROVED PDF PARSING FUNCTION ---
 def extract_quantities_from_pdf(pdf_file):
     """Extracts part quantities from invoice PDF based on 9-character matching."""
     extracted_counts = {}
@@ -270,28 +271,45 @@ def extract_quantities_from_pdf(pdf_file):
                 continue
 
             for line in text.split("\n"):
-                # Matches patterns like: GM1100CBA  ...  2128
-                match = re.search(r"^([A-Z0-9\-]+).*?\s+(\d+)\s*$", line.strip())
+                # Clean line whitespace
+                clean_line = line.strip()
+
+                # Flexible Regex: Captures Part Number (e.g. GM1100CBA) and QTY (e.g. 672 or 448)
+                match = re.search(
+                    r"([A-Z0-9]{9}[A-Z0-9\-]*)\s+.*?(\d+)\s*(?:KG)?\s+(\d+)",
+                    clean_line,
+                )
+
                 if match:
                     raw_part_name = match.group(1)
-                    qty = int(match.group(2))
-
-                    # Key on the first 9 characters only
-                    base_part = raw_part_name[:9]
-                    extracted_counts[base_part] = (
-                        extracted_counts.get(base_part, 0) + qty
+                    qty = int(match.group(3))
+                else:
+                    # Alternative fallback match for simpler line formats (Part + QTY at line end)
+                    match_simple = re.search(
+                        r"^([A-Z0-9]{8,15})\s+.*?(\d+)\s*$", clean_line
                     )
+                    if match_simple:
+                        raw_part_name = match_simple.group(1)
+                        qty = int(match_simple.group(2))
+                    else:
+                        continue
+
+                # Lock to 9-character base part key
+                base_part = raw_part_name[:9]
+                extracted_counts[base_part] = (
+                    extracted_counts.get(base_part, 0) + qty
+                )
 
     return extracted_counts
 
-
+# --- SIDEBAR PDF UPLOADER ---
 # --- SIDEBAR PDF UPLOADER ---
 st.sidebar.header("Invoice Auto-Fill")
 pdf_file = st.sidebar.file_uploader("Upload AGS Invoice (PDF)", type=["pdf"])
 
 pdf_triggered_calc = False
 
-# Initialize session state dataframe for quantities if not present
+# Session state initializations
 if "quantities_df" not in st.session_state:
     st.session_state.quantities_df = pd.DataFrame(
         {
@@ -301,6 +319,33 @@ if "quantities_df" not in st.session_state:
             "PartQuantity": 0,
         }
     )
+
+if "editor_key" not in st.session_state:
+    st.session_state.editor_key = 0
+
+# Handle PDF Upload Process
+if pdf_file is not None:
+    if (
+        "last_uploaded_pdf" not in st.session_state
+        or st.session_state.last_uploaded_pdf != pdf_file.name
+    ):
+        extracted_data = extract_quantities_from_pdf(pdf_file)
+
+        # Map extracted quantities matching 9-character base name
+        new_quantities = []
+        for p_name in df["PartName"]:
+            base = p_name[:9]
+            new_quantities.append(extracted_data.get(base, 0))
+
+        st.session_state.quantities_df["PartQuantity"] = new_quantities
+        st.session_state.last_uploaded_pdf = pdf_file.name
+
+        # Increment editor key to force st.data_editor to render updated session state values
+        st.session_state.editor_key += 1
+        pdf_triggered_calc = True
+        st.sidebar.success(
+            f"Extracted {sum(new_quantities)} parts from invoice!"
+        )
 
 # Handle PDF Upload Process
 if pdf_file is not None:
@@ -330,7 +375,7 @@ with center_col:
     # Displays PartName, ContainerType, MaxPartsPerContainer, and editable PartQuantity
     edited_df = st.data_editor(
         st.session_state.quantities_df,
-        key="data_editor",
+        key=f"data_editor_{st.session_state.editor_key}",
         num_rows="fixed",
         disabled=["PartName", "ContainerType", "MaxPartsPerContainer"],
         use_container_width=True,
