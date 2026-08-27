@@ -144,7 +144,7 @@ def plot_3d_truck(packed_items, fill_percentage):
                 j=j,
                 k=k,
                 color=color_map[c_type],
-                opacity=0.99,
+                opacity=1.0,
                 name=f"{item['part_name']} ({c_type})",
                 hoverinfo="name",
             )
