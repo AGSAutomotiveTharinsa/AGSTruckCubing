@@ -16,59 +16,57 @@ MAX_WEIGHT_KG = 18824.083  # kg
 
 # --- STRICT SAME-SIZE STACKING PACKING ALGORITHM ---
 def pack_truck_realistically(containers_list):
-    """Packs containers into the trailer.
+    """Packs containers into the trailer with strict same-size vertical stacking.
 
-    STRICT RULE: Boxes can ONLY stack on top of boxes that share the exact
-    same dimensions and type. Stacks are isolated so different container sizes
-    NEVER overlap or stack on each other.
+    Returns packed items and unplaced items.
     """
     packed_items = []
     unpacked_items = []
 
-    # 1. Group containers by unique type and dimensions
+    # Group containers by type and dimensions
     groups = {}
     for c in containers_list:
-        key = (c["type"], c["length"], c["width"], c["height"])
+        key = (
+            c["part_name"],
+            c["type"],
+            c["length"],
+            c["width"],
+            c["height"],
+            c["max_parts"],
+        )
         if key not in groups:
             groups[key] = []
         groups[key].append(c)
 
-    # Sort groups by size descending (length, width, height)
+    # Sort groups by size descending
     sorted_group_keys = sorted(
-        groups.keys(), key=lambda k: (k[1], k[2], k[3]), reverse=True
+        groups.keys(), key=lambda k: (k[2], k[3], k[4]), reverse=True
     )
 
     current_x = 0.0
     current_y = 0.0
     current_row_length = 0.0
 
-    # Grid tracking matrix to guarantee zero physical coordinate overlaps
-    occupied_lanes = []
-
     for key in sorted_group_keys:
         items = groups[key]
-        c_type, l, w, h = key
+        part_name, c_type, l, w, h, max_parts = key
 
-        # Max vertical stack height allowed for this container size
         max_stack_z = max(1, math.floor(TRAILER_HEIGHT / h))
-
         item_index = 0
         total_group_items = len(items)
 
         while item_index < total_group_items:
-            # Check if current Y placement exceeds trailer width
+            # Check width boundary
             if current_y + w > TRAILER_WIDTH:
                 current_x += current_row_length
                 current_y = 0.0
                 current_row_length = 0.0
 
-            # Check if current X placement exceeds trailer length
+            # Check length boundary
             if current_x + l > TRAILER_LENGTH:
-                # Trailer is completely full in X & Y space
                 unpacked_items.extend(items[item_index:])
                 break
 
-            # Create a dedicated stack column at (current_x, current_y)
             stack_count = min(total_group_items - item_index, max_stack_z)
 
             for z_idx in range(stack_count):
@@ -77,44 +75,14 @@ def pack_truck_realistically(containers_list):
                 packed_items.append({**curr_item, "position": pos})
                 item_index += 1
 
-            # Update footprint row tracking
             current_row_length = max(current_row_length, l)
-
-            # Advance Y by this container's exact width to prevent overlap
             current_y += w
 
-    # 2. Position unpacked overflow items OUTSIDE trailer boundary (Y > 102)
-    out_x = 0.0
-    out_y = TRAILER_WIDTH + 15.0
-    out_z = 0.0
-    out_row_l = 0.0
-
-    positioned_unpacked = []
-    for item in unpacked_items:
-        l, w, h = item["length"], item["width"], item["height"]
-        if out_z + h > TRAILER_HEIGHT:
-            out_z = 0.0
-            out_y += w + 5.0
-
-        pos = (out_x, out_y, out_z)
-        positioned_unpacked.append({**item, "position": pos})
-        out_z += h
-        out_row_l = max(out_row_l, l)
-
-        if out_z >= TRAILER_HEIGHT:
-            out_z = 0.0
-            out_x += out_row_l
-            out_row_l = 0.0
-
-    return packed_items, positioned_unpacked
+    return packed_items, unpacked_items
 
 
-def plot_3d_truck(packed_items, unpacked_items):
-    """Generates 3D visualization.
-
-    Trailer frame size remains fixed at all times. Unpacked items are rendered
-    outside the trailer boundary.
-    """
+def plot_3d_truck(packed_items):
+    """Renders ONLY items packed safely inside the fixed trailer dimensions."""
     fig = go.Figure()
 
     # Fixed Trailer Wireframe Boundary (Black Box)
@@ -126,11 +94,11 @@ def plot_3d_truck(packed_items, unpacked_items):
             z=[0, 0, 0, 0, 0, dz, dz, dz, dz, dz, dz, 0, 0, dz, dz, 0],
             mode="lines",
             line=dict(color="black", width=5),
-            name="Trailer Boundary (Fixed)",
+            name="Trailer Boundary",
         )
     )
 
-    # Palette mapping per container type
+    # Color mapping
     color_map = {}
     colors = [
         "royalblue",
@@ -142,15 +110,11 @@ def plot_3d_truck(packed_items, unpacked_items):
         "gold",
     ]
 
-    all_items = packed_items + unpacked_items
-    for item in all_items:
+    for item in packed_items:
         c_type = item["type"]
         if c_type not in color_map:
             color_map[c_type] = colors[len(color_map) % len(colors)]
 
-    # Draw Packed Items Inside Trailer
-    for item in packed_items:
-        c_type = item["type"]
         x0, y0, z0 = item["position"]
         d, w, h = item["length"], item["width"], item["height"]
 
@@ -172,52 +136,21 @@ def plot_3d_truck(packed_items, unpacked_items):
                 k=k,
                 color=color_map[c_type],
                 opacity=0.85,
-                name=f"{item['name']} (Packed)",
+                name=f"{item['part_name']} ({c_type})",
                 hoverinfo="name",
             )
         )
-
-    # Draw Unpacked Items Outside Trailer (Red outline / shaded)
-    for item in unpacked_items:
-        x0, y0, z0 = item["position"]
-        d, w, h = item["length"], item["width"], item["height"]
-
-        x = [x0, x0 + d, x0 + d, x0, x0, x0 + d, x0 + d, x0]
-        y = [y0, y0, y0 + w, y0 + w, y0, y0, y0 + w, y0 + w]
-        z = [z0, z0, z0, z0, z0 + h, z0 + h, z0 + h, z0 + h]
-
-        i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
-        j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
-        k = [0, 7, 5, 3, 6, 7, 1, 1, 5, 5, 7, 6]
-
-        fig.add_trace(
-            go.Mesh3d(
-                x=x,
-                y=y,
-                z=z,
-                i=i,
-                j=j,
-                k=k,
-                color="darkred",
-                opacity=0.5,
-                name=f"{item['name']} (OVERFLOW - Outside)",
-                hoverinfo="name",
-            )
-        )
-
-    # Enforce Fixed Axes Ranges so Trailer Never Shrinks or Changes Size
-    max_y_range = max(TRAILER_WIDTH + 60.0, 180.0) if unpacked_items else TRAILER_WIDTH + 20.0
 
     fig.update_layout(
         scene=dict(
             xaxis=dict(
                 title="Length (X - 636\")",
-                range=[0, TRAILER_LENGTH + 20],
+                range=[0, TRAILER_LENGTH + 10],
                 autorange=False,
             ),
             yaxis=dict(
-                title="Width (Y - 102\") [Overflow Outside > 102\"]",
-                range=[0, max_y_range],
+                title="Width (Y - 102\")",
+                range=[0, TRAILER_WIDTH + 10],
                 autorange=False,
             ),
             zaxis=dict(
@@ -228,11 +161,11 @@ def plot_3d_truck(packed_items, unpacked_items):
             aspectmode="manual",
             aspectratio=dict(
                 x=TRAILER_LENGTH / TRAILER_LENGTH,
-                y=max_y_range / TRAILER_LENGTH,
+                y=TRAILER_WIDTH / TRAILER_LENGTH,
                 z=TRAILER_HEIGHT / TRAILER_LENGTH,
             ),
         ),
-        margin=dict(r=0, l=0, b=0, t=30),
+        margin=dict(r=0, l=0, b=0, t=10),
     )
     return fig
 
@@ -249,7 +182,6 @@ else:
     st.info("👈 Please upload your `PartsData.xlsx` file to begin.")
     st.stop()
 
-# Ensure required columns exist
 required_cols = [
     "PartName",
     "MaxPartsPerContainer",
@@ -299,32 +231,38 @@ if st.button("Calculate Truck Load & Spatial Fit", type="primary"):
     total_weight = 0.0
 
     for idx, row in selected_parts.iterrows():
-        qty = row["Quantity"]
-        max_per_container = row["MaxPartsPerContainer"]
-
-        if pd.isna(max_per_container) or max_per_container <= 0:
-            num_containers = 1
-        else:
-            num_containers = math.ceil(qty / max_per_container)
+        qty = int(row["Quantity"])
+        max_per_container = (
+            int(row["MaxPartsPerContainer"])
+            if not pd.isna(row["MaxPartsPerContainer"])
+            else 1
+        )
+        num_containers = math.ceil(qty / max_per_container)
 
         unit_weight = (
             row["GrossWeight"] if not pd.isna(row["GrossWeight"]) else 0.0
         )
 
+        remaining_parts = qty
         for i in range(num_containers):
+            parts_in_this_box = min(remaining_parts, max_per_container)
             containers_to_pack.append(
                 {
+                    "part_name": str(row["PartName"]),
                     "name": f"{row['PartName']} (C{i+1})",
                     "type": str(row["ContainerType"]),
                     "length": float(row["ContainerLength"]),
                     "width": float(row["ContainerWidth"]),
                     "height": float(row["ContainerHeight"]),
                     "weight": float(unit_weight),
+                    "max_parts": max_per_container,
+                    "parts_count": parts_in_this_box,
                 }
             )
             total_weight += unit_weight
+            remaining_parts -= parts_in_this_box
 
-    # Run packing algorithm with same-size stacking constraint
+    # Run packing algorithm
     packed_items, unpacked_items = pack_truck_realistically(containers_to_pack)
 
     total_requested = len(containers_to_pack)
@@ -346,17 +284,42 @@ if st.button("Calculate Truck Load & Spatial Fit", type="primary"):
     col3.metric("Unpacked Containers", f"{unpacked_count} Units")
 
     if is_weight_ok and is_space_ok:
-        st.success(
-            "✅ **TRUCK STATUS: FIT** — All containers packed with same-size vertical stacking inside trailer."
-        )
+        st.success("✅ **TRUCK STATUS: FIT** — All items fit within capacity.")
     else:
-        status_msg = "⚠️ **TRUCK STATUS: FULL / OVERLOADED**\n\n"
-        if not is_weight_ok:
-            status_msg += f"* **Weight Limit Exceeded:** Over capacity by {total_weight - MAX_WEIGHT_KG:,.2f} kg.\n"
-        if not is_space_ok:
-            status_msg += f"* **Spatial Limit Exceeded:** {unpacked_count} container(s) cannot fit and are stacked outside the trailer in dark red.\n"
-        st.error(status_msg)
+        st.error(
+            "⚠️ **TRUCK STATUS: OVERLOADED** — Some items cannot fit inside the trailer."
+        )
 
-    st.subheader("3. 3D Spatial Layout")
-    fig_3d = plot_3d_truck(packed_items, unpacked_items)
-    st.plotly_chart(fig_3d, use_container_width=True)
+    st.subheader("3. 3D Spatial Layout & Unpacked Summary")
+
+    # Split screen into Plot (left) and Unpacked List (right)
+    col_plot, col_unpacked = st.columns([7, 3])
+
+    with col_plot:
+        fig_3d = plot_3d_truck(packed_items)
+        st.plotly_chart(fig_3d, use_container_width=True)
+
+    with col_unpacked:
+        st.markdown("### ⚠️ Unpacked Items")
+        if unpacked_items:
+            unpacked_df = pd.DataFrame(unpacked_items)
+            summary = (
+                unpacked_df.groupby(["part_name", "type"])
+                .agg(
+                    Unpacked_Containers=("name", "count"),
+                    Unpacked_Parts_QTY=("parts_count", "sum"),
+                )
+                .reset_index()
+                .rename(
+                    columns={
+                        "part_name": "Part Name",
+                        "type": "Container Type",
+                        "Unpacked_Containers": "Unpacked Containers",
+                        "Unpacked_Parts_QTY": "Unpacked QTY",
+                    }
+                )
+            )
+
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+        else:
+            st.success("All boxes packed successfully!")
