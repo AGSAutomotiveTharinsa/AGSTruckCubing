@@ -368,14 +368,26 @@ if calculate_clicked:
     col1.metric("Total Containers", f"{total_requested} Units")
 
     # Enlarged Gross Weight Margin label underneath metric
+    # Enlarged Gross Weight Margin label using custom HTML in the metric label
     weight_margin = MAX_WEIGHT_KG - total_weight
-    margin_color = "#28a745" if is_weight_ok else "#dc3545"
+    delta_color = "#28a745" if is_weight_ok else "#dc3545"
+    delta_arrow = "↓" if is_weight_ok else "↑"
+
     with col2:
-        st.metric("Gross Weight", f"{total_weight:,.2f} kg")
+        st.metric(
+            label="Gross Weight",
+            value=f"{total_weight:,.2f} kg",
+            delta=f"{weight_margin:,.2f} kg margin",
+        )
         st.markdown(
-            f"<div style='margin-top: -12px; font-size: 15px; font-weight: 600; color: {margin_color};'>"
-            f"Margin: {weight_margin:,.2f} kg"
-            f"</div>",
+            f"""
+            <style>
+            [data-testid="stMetricDelta"] {{
+                font-size: 16px !important;
+                font-weight: 600 !important;
+            }}
+            </style>
+            """,
             unsafe_allow_html=True,
         )
 
