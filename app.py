@@ -288,21 +288,14 @@ if pdf_file is not None:
             "Processing PDF via Power Automate...", expanded=True
         ) as status:
             try:
-                # 1. Read and encode the raw PDF bytes to Base64
+                # 1. Get raw binary bytes from the Streamlit file upload
                 pdf_bytes = pdf_file.getvalue()
-                encoded_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
 
-                # 2. Build payload formatted for Power Automate HTTP trigger
-                payload = {
-                    "$content-type": "application/pdf",
-                    "$content": encoded_pdf,
-                }
-
-                # 3. Post JSON payload with explicit content-type header
+                # 2. Post RAW BINARY bytes directly with application/pdf Content-Type header
                 response = requests.post(
                     POWER_AUTOMATE_URL,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
+                    data=pdf_bytes,
+                    headers={"Content-Type": "application/pdf"},
                     timeout=30,
                 )
 
