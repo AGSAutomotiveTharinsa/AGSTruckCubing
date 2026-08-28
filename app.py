@@ -1,10 +1,10 @@
+import base64
 import math
 import re
 import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-import base64
 
 # --- POWER AUTOMATE FLOW ENDPOINT ---
 POWER_AUTOMATE_URL = "https://default9b2f9cbe865b4df8a5848494d8c1ef.f6.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/16/workflows/46a10b2e46d44a40a3a7163624ce59a5/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GiJ6B2AxQl-aCWfJi8Fc66lC-zJyxtqyzM3GMCS0z3Y"
@@ -170,17 +170,17 @@ def plot_3d_truck(packed_items, fill_percentage):
         ),
         scene=dict(
             xaxis=dict(
-                title="Length (X - 636\")",
+                title='Length (X - 636")',
                 range=[0, TRAILER_LENGTH + 10],
                 autorange=False,
             ),
             yaxis=dict(
-                title="Width (Y - 102\")",
+                title='Width (Y - 102")',
                 range=[0, TRAILER_WIDTH + 10],
                 autorange=False,
             ),
             zaxis=dict(
-                title="Height (Z - 110\")",
+                title='Height (Z - 110")',
                 range=[0, TRAILER_HEIGHT + 10],
                 autorange=False,
             ),
@@ -279,38 +279,6 @@ if "editor_key" not in st.session_state:
     st.session_state.editor_key = 0
 
 # Handle PDF Upload Process via Power Automate HTTP Webhook
-# --- IMPORTS (Add base64 at top of script) ---
-import base64
-import math
-import re
-import pandas as pd
-import plotly.graph_objects as go
-import requests
-import streamlit as st
-
-# ... [Keep your constants, algorithms, and hardcoded manifest data as-is] ...
-
-# --- SIDEBAR PDF UPLOADER ---
-st.sidebar.header("Invoice Auto-Fill")
-pdf_file = st.sidebar.file_uploader("Upload AGS Invoice (PDF)", type=["pdf"])
-
-pdf_triggered_calc = False
-
-# Session state initializations
-if "quantities_df" not in st.session_state:
-    st.session_state.quantities_df = pd.DataFrame(
-        {
-            "PartName": df["PartName"],
-            "ContainerType": df["ContainerType"],
-            "MaxPartsPerContainer": df["MaxPartsPerContainer"],
-            "PartQuantity": 0,
-        }
-    )
-
-if "editor_key" not in st.session_state:
-    st.session_state.editor_key = 0
-
-# --- REPLACE THIS BLOCK IN YOUR CODE ---
 if pdf_file is not None:
     if (
         "last_uploaded_pdf" not in st.session_state
