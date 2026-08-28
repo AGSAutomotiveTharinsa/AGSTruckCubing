@@ -292,13 +292,16 @@ if pdf_file is not None:
                 pdf_bytes = pdf_file.getvalue()
                 encoded_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
 
-                # 2. Send JSON payload containing Base64 content
+                # 2. Build payload formatted for Power Automate HTTP trigger
+                payload = {
+                    "$content-type": "application/pdf",
+                    "$content": encoded_pdf,
+                }
+
+                # 3. Post JSON payload with explicit content-type header
                 response = requests.post(
                     POWER_AUTOMATE_URL,
-                    json={
-                        "$content-type": "application/pdf",
-                        "$content": encoded_pdf,
-                    },
+                    json=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=30,
                 )
