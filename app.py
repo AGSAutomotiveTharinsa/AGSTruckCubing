@@ -308,24 +308,41 @@ if pdf_file is not None:
 
                 if response.status_code == 200:
                     extracted_items = response.json()
-
-                    # Convert response to dictionary mapping base part name (9 chars) to quantity
                     extracted_counts = {}
+
+                    # Parse direct line text returned via "All detected text lines" bypass
                     if isinstance(extracted_items, list):
                         for item in extracted_items:
-                            p_num = str(item.get("part_number", ""))[:9]
-                            try:
-                                qty = int(float(item.get("quantity", 0)))
-                            except (ValueError, TypeError):
-                                qty = 0
-                            if p_num:
-                                extracted_counts[p_num] = (
-                                    extracted_counts.get(p_num, 0) + qty
-                                )
+                            # Extract text line from payload
+                            line_text = str(
+                                item.get("part_number") or item.get("text", "")
+                            ).upper()
+
+                            if not line_text:
+                                continue
+
+                            # Check for matching part numbers in text line
+                            for part_name in df["PartName"]:
+                                base_code = part_name[:9].upper()
+                                if base_code in line_text:
+                                    # Regex search for numeric quantities in line text
+                                    numbers = re.findall(r"\b\d+\b", line_text)
+                                    if numbers:
+                                        # Use detected number or fall back to structured quantity property
+                                        qty = int(numbers[-1])
+                                    else:
+                                        try:
+                                            qty = int(float(item.get("quantity", 1)))
+                                        except (ValueError, TypeError):
+                                            qty = 1
+
+                                    extracted_counts[base_code] = (
+                                        extracted_counts.get(base_code, 0) + qty
+                                    )
 
                     # Map extracted quantities to DataFrame order
                     new_quantities = [
-                        extracted_counts.get(p_name[:9], 0)
+                        extracted_counts.get(p_name[:9].upper(), 0)
                         for p_name in df["PartName"]
                     ]
 
