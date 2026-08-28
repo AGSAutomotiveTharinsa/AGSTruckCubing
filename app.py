@@ -146,7 +146,7 @@ def plot_3d_truck(packed_items, fill_percentage):
                 j=j,
                 k=k,
                 color=color_map[c_type],
-                opacity=0.99,
+                opacity=0.75,
                 lighting=dict(ambient=0.8, diffuse=0.8),
                 flatshading=True,
                 name=f"{item['part_name']} ({c_type})",
