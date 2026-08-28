@@ -258,51 +258,59 @@ df = pd.DataFrame(data)
 df["BasePartName"] = df["PartName"].str[:9]
 
 
-# --- PDF PARSING FUNCTION ---
-# --- IMPROVED PDF PARSING FUNCTION ---
+# --- COORDINATE-BASED PDF PARSING FUNCTION ---
 def extract_quantities_from_pdf(pdf_file):
-    """Extracts part quantities from invoice PDF based on 9-character matching."""
+    """Extracts part quantities by clustering words into visual rows within vertical tolerance."""
     extracted_counts = {}
 
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
-            text = page.extract_text()
-            if not text:
+            words = page.extract_words()
+            if not words:
                 continue
 
-            for line in text.split("\n"):
-                # Clean line whitespace
-                clean_line = line.strip()
+            words = sorted(words, key=lambda w: (w["top"], w["x0"]))
 
-                # Flexible Regex: Captures Part Number (e.g. GM1100CBA) and QTY (e.g. 672 or 448)
-                match = re.search(
-                    r"([A-Z0-9]{9}[A-Z0-9\-]*)\s+.*?(\d+)\s*(?:KG)?\s+(\d+)",
-                    clean_line,
-                )
+            rows = []
+            current_row = []
+            last_top = None
 
-                if match:
-                    raw_part_name = match.group(1)
-                    qty = int(match.group(3))
+            for w in words:
+                if last_top is None or abs(w["top"] - last_top) <= 3:
+                    current_row.append(w)
+                    if last_top is None:
+                        last_top = w["top"]
                 else:
-                    # Alternative fallback match for simpler line formats (Part + QTY at line end)
-                    match_simple = re.search(
-                        r"^([A-Z0-9]{8,15})\s+.*?(\d+)\s*$", clean_line
-                    )
-                    if match_simple:
-                        raw_part_name = match_simple.group(1)
-                        qty = int(match_simple.group(2))
-                    else:
-                        continue
+                    rows.append(current_row)
+                    current_row = [w]
+                    last_top = w["top"]
 
-                # Lock to 9-character base part key
-                base_part = raw_part_name[:9]
-                extracted_counts[base_part] = (
-                    extracted_counts.get(base_part, 0) + qty
-                )
+            if current_row:
+                rows.append(current_row)
+
+            for row in rows:
+                row_words = sorted(row, key=lambda x: x["x0"])
+                
+                part_candidates = [
+                    w["text"] for w in row_words 
+                    if w["x0"] < 250 and len(w["text"]) >= 8 and w["text"][:2] in ["GM", "FC", "CV"]
+                ]
+                
+                qty_candidates = [
+                    w["text"] for w in row_words 
+                    if w["x0"] > 400 and w["text"].isdigit() and not w["text"].startswith("202")
+                ]
+
+                if part_candidates and qty_candidates:
+                    raw_part_name = part_candidates[0]
+                    qty = int(qty_candidates[-1])
+                    
+                    base_part = raw_part_name[:9]
+                    extracted_counts[base_part] = extracted_counts.get(base_part, 0) + qty
 
     return extracted_counts
 
-# --- SIDEBAR PDF UPLOADER ---
+
 # --- SIDEBAR PDF UPLOADER ---
 st.sidebar.header("Invoice Auto-Fill")
 pdf_file = st.sidebar.file_uploader("Upload AGS Invoice (PDF)", type=["pdf"])
@@ -347,25 +355,6 @@ if pdf_file is not None:
             f"Extracted {sum(new_quantities)} parts from invoice!"
         )
 
-# Handle PDF Upload Process
-if pdf_file is not None:
-    if (
-        "last_uploaded_pdf" not in st.session_state
-        or st.session_state.last_uploaded_pdf != pdf_file.name
-    ):
-        extracted_data = extract_quantities_from_pdf(pdf_file)
-
-        # Map extracted quantities matching the 9-character base part name
-        new_quantities = []
-        for p_name in df["PartName"]:
-            base = p_name[:9]
-            new_quantities.append(extracted_data.get(base, 0))
-
-        st.session_state.quantities_df["PartQuantity"] = new_quantities
-        st.session_state.last_uploaded_pdf = pdf_file.name
-        st.sidebar.success("Invoice quantities loaded automatically!")
-        pdf_triggered_calc = True
-
 # --- CENTERED QUANTITY ENTRY SECTION ---
 left_pad, center_col, right_pad = st.columns([1, 2, 1])
 
@@ -396,8 +385,7 @@ with center_col:
             st.session_state.quantities_df["PartQuantity"] = 0
             if "last_uploaded_pdf" in st.session_state:
                 del st.session_state["last_uploaded_pdf"]
-            if "data_editor" in st.session_state:
-                del st.session_state["data_editor"]
+            st.session_state.editor_key += 1
             st.rerun()
 
 # Sync inputs
@@ -478,7 +466,6 @@ if calculate_clicked or pdf_triggered_calc:
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Containers", f"{total_requested} Units")
 
-    # Enlarged Gross Weight Margin label underneath metric
     weight_margin = MAX_WEIGHT_KG - total_weight
     margin_color = "#28a745" if is_weight_ok else "#dc3545"
     with col2:
@@ -495,7 +482,6 @@ if calculate_clicked or pdf_triggered_calc:
 
     st.write("")  # Spacing
 
-    # Status breakdown logic
     if is_weight_ok and is_space_ok:
         st.success(
             "✅ **TRUCK STATUS: FIT** — All items fit within weight and space limits."
