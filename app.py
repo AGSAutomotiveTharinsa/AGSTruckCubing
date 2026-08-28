@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+import base64
 
 # --- POWER AUTOMATE FLOW ENDPOINT ---
 POWER_AUTOMATE_URL = "https://default9b2f9cbe865b4df8a5848494d8c1ef.f6.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/16/workflows/46a10b2e46d44a40a3a7163624ce59a5/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GiJ6B2AxQl-aCWfJi8Fc66lC-zJyxtqyzM3GMCS0z3Y"
@@ -278,23 +279,65 @@ if "editor_key" not in st.session_state:
     st.session_state.editor_key = 0
 
 # Handle PDF Upload Process via Power Automate HTTP Webhook
+# --- IMPORTS (Add base64 at top of script) ---
+import base64
+import math
+import re
+import pandas as pd
+import plotly.graph_objects as go
+import requests
+import streamlit as st
+
+# ... [Keep your constants, algorithms, and hardcoded manifest data as-is] ...
+
+# --- SIDEBAR PDF UPLOADER ---
+st.sidebar.header("Invoice Auto-Fill")
+pdf_file = st.sidebar.file_uploader("Upload AGS Invoice (PDF)", type=["pdf"])
+
+pdf_triggered_calc = False
+
+# Session state initializations
+if "quantities_df" not in st.session_state:
+    st.session_state.quantities_df = pd.DataFrame(
+        {
+            "PartName": df["PartName"],
+            "ContainerType": df["ContainerType"],
+            "MaxPartsPerContainer": df["MaxPartsPerContainer"],
+            "PartQuantity": 0,
+        }
+    )
+
+if "editor_key" not in st.session_state:
+    st.session_state.editor_key = 0
+
+# --- REPLACE THIS BLOCK IN YOUR CODE ---
 if pdf_file is not None:
     if (
         "last_uploaded_pdf" not in st.session_state
         or st.session_state.last_uploaded_pdf != pdf_file.name
     ):
-        with st.sidebar.status("Processing PDF via Power Automate...", expanded=True) as status:
+        with st.sidebar.status(
+            "Processing PDF via Power Automate...", expanded=True
+        ) as status:
             try:
+                # 1. Read and encode the raw PDF bytes to Base64
+                pdf_bytes = pdf_file.getvalue()
+                encoded_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
+
+                # 2. Send JSON payload containing Base64 content
                 response = requests.post(
                     POWER_AUTOMATE_URL,
-                    data=pdf_file.getvalue(),
-                    headers={"Content-Type": "application/pdf"},
+                    json={
+                        "$content-type": "application/pdf",
+                        "$content": encoded_pdf,
+                    },
+                    headers={"Content-Type": "application/json"},
                     timeout=30,
                 )
 
                 if response.status_code == 200:
                     extracted_items = response.json()
-                    
+
                     # Convert response to dictionary mapping base part name (9 chars) to quantity
                     extracted_counts = {}
                     if isinstance(extracted_items, list):
@@ -305,7 +348,9 @@ if pdf_file is not None:
                             except (ValueError, TypeError):
                                 qty = 0
                             if p_num:
-                                extracted_counts[p_num] = extracted_counts.get(p_num, 0) + qty
+                                extracted_counts[p_num] = (
+                                    extracted_counts.get(p_num, 0) + qty
+                                )
 
                     # Map extracted quantities to DataFrame order
                     new_quantities = [
@@ -313,20 +358,36 @@ if pdf_file is not None:
                         for p_name in df["PartName"]
                     ]
 
-                    st.session_state.quantities_df["PartQuantity"] = new_quantities
+                    st.session_state.quantities_df["PartQuantity"] = (
+                        new_quantities
+                    )
                     st.session_state.last_uploaded_pdf = pdf_file.name
                     st.session_state.editor_key += 1
                     pdf_triggered_calc = True
-                    
-                    status.update(label="Invoice extracted successfully!", state="complete", expanded=False)
-                    st.sidebar.success(f"Extracted {sum(new_quantities)} total parts!")
+
+                    status.update(
+                        label="Invoice extracted successfully!",
+                        state="complete",
+                        expanded=False,
+                    )
+                    st.sidebar.success(
+                        f"Extracted {sum(new_quantities)} total parts!"
+                    )
                     st.rerun()
                 else:
-                    status.update(label="Failed to parse PDF", state="error", expanded=False)
-                    st.sidebar.error(f"Power Automate Error (HTTP {response.status_code}): {response.text}")
+                    status.update(
+                        label="Failed to parse PDF",
+                        state="error",
+                        expanded=False,
+                    )
+                    st.sidebar.error(
+                        f"Power Automate Error (HTTP {response.status_code}): {response.text}"
+                    )
 
             except Exception as e:
-                status.update(label="Connection Error", state="error", expanded=False)
+                status.update(
+                    label="Connection Error", state="error", expanded=False
+                )
                 st.sidebar.error(f"Failed to call Power Automate: {e}")
 
 # --- CENTERED QUANTITY ENTRY SECTION ---
