@@ -1,9 +1,12 @@
 import math
 import re
 import pandas as pd
-import pdfplumber
 import plotly.graph_objects as go
+import requests
 import streamlit as st
+
+# --- POWER AUTOMATE FLOW ENDPOINT ---
+POWER_AUTOMATE_URL = "https://default9b2f9cbe865b4df8a5848494d8c1ef.f6.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/16/workflows/46a10b2e46d44a40a3a7163624ce59a5/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GiJ6B2AxQl-aCWfJi8Fc66lC-zJyxtqyzM3GMCS0z3Y"
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Trailer Optimization", layout="wide")
@@ -254,63 +257,6 @@ data = {
 
 df = pd.DataFrame(data)
 
-# Create a mapping helper column for base part names (first 9 chars)
-df["BasePartName"] = df["PartName"].str[:9]
-
-
-# --- COORDINATE-BASED PDF PARSING FUNCTION ---
-def extract_quantities_from_pdf(pdf_file):
-    """Extracts part quantities by clustering words into visual rows within vertical tolerance."""
-    extracted_counts = {}
-
-    with pdfplumber.open(pdf_file) as pdf:
-        for page in pdf.pages:
-            words = page.extract_words()
-            if not words:
-                continue
-
-            words = sorted(words, key=lambda w: (w["top"], w["x0"]))
-
-            rows = []
-            current_row = []
-            last_top = None
-
-            for w in words:
-                if last_top is None or abs(w["top"] - last_top) <= 3:
-                    current_row.append(w)
-                    if last_top is None:
-                        last_top = w["top"]
-                else:
-                    rows.append(current_row)
-                    current_row = [w]
-                    last_top = w["top"]
-
-            if current_row:
-                rows.append(current_row)
-
-            for row in rows:
-                row_words = sorted(row, key=lambda x: x["x0"])
-                
-                part_candidates = [
-                    w["text"] for w in row_words 
-                    if w["x0"] < 250 and len(w["text"]) >= 8 and w["text"][:2] in ["GM", "FC", "CV"]
-                ]
-                
-                qty_candidates = [
-                    w["text"] for w in row_words 
-                    if w["x0"] > 400 and w["text"].isdigit() and not w["text"].startswith("202")
-                ]
-
-                if part_candidates and qty_candidates:
-                    raw_part_name = part_candidates[0]
-                    qty = int(qty_candidates[-1])
-                    
-                    base_part = raw_part_name[:9]
-                    extracted_counts[base_part] = extracted_counts.get(base_part, 0) + qty
-
-    return extracted_counts
-
-
 # --- SIDEBAR PDF UPLOADER ---
 st.sidebar.header("Invoice Auto-Fill")
 pdf_file = st.sidebar.file_uploader("Upload AGS Invoice (PDF)", type=["pdf"])
@@ -331,29 +277,57 @@ if "quantities_df" not in st.session_state:
 if "editor_key" not in st.session_state:
     st.session_state.editor_key = 0
 
-# Handle PDF Upload Process
+# Handle PDF Upload Process via Power Automate HTTP Webhook
 if pdf_file is not None:
     if (
         "last_uploaded_pdf" not in st.session_state
         or st.session_state.last_uploaded_pdf != pdf_file.name
     ):
-        extracted_data = extract_quantities_from_pdf(pdf_file)
+        with st.sidebar.status("Processing PDF via Power Automate...", expanded=True) as status:
+            try:
+                response = requests.post(
+                    POWER_AUTOMATE_URL,
+                    data=pdf_file.getvalue(),
+                    headers={"Content-Type": "application/pdf"},
+                    timeout=30,
+                )
 
-        # Map extracted quantities matching 9-character base name
-        new_quantities = []
-        for p_name in df["PartName"]:
-            base = p_name[:9]
-            new_quantities.append(extracted_data.get(base, 0))
+                if response.status_code == 200:
+                    extracted_items = response.json()
+                    
+                    # Convert response to dictionary mapping base part name (9 chars) to quantity
+                    extracted_counts = {}
+                    if isinstance(extracted_items, list):
+                        for item in extracted_items:
+                            p_num = str(item.get("part_number", ""))[:9]
+                            try:
+                                qty = int(float(item.get("quantity", 0)))
+                            except (ValueError, TypeError):
+                                qty = 0
+                            if p_num:
+                                extracted_counts[p_num] = extracted_counts.get(p_num, 0) + qty
 
-        st.session_state.quantities_df["PartQuantity"] = new_quantities
-        st.session_state.last_uploaded_pdf = pdf_file.name
+                    # Map extracted quantities to DataFrame order
+                    new_quantities = [
+                        extracted_counts.get(p_name[:9], 0)
+                        for p_name in df["PartName"]
+                    ]
 
-        # Increment editor key to force st.data_editor to render updated session state values
-        st.session_state.editor_key += 1
-        pdf_triggered_calc = True
-        st.sidebar.success(
-            f"Extracted {sum(new_quantities)} parts from invoice!"
-        )
+                    st.session_state.quantities_df["PartQuantity"] = new_quantities
+                    st.session_state.last_uploaded_pdf = pdf_file.name
+                    st.session_state.editor_key += 1
+                    pdf_triggered_calc = True
+                    
+                    status.update(label="Invoice extracted successfully!", state="complete", expanded=False)
+                    st.sidebar.success(f"Extracted {sum(new_quantities)} total parts!")
+                    st.rerun()
+                else:
+                    status.update(label="Failed to parse PDF", state="error", expanded=False)
+                    st.sidebar.error(f"Power Automate Error (HTTP {response.status_code}): {response.text}")
+
+            except Exception as e:
+                status.update(label="Connection Error", state="error", expanded=False)
+                st.sidebar.error(f"Failed to call Power Automate: {e}")
 
 # --- CENTERED QUANTITY ENTRY SECTION ---
 left_pad, center_col, right_pad = st.columns([1, 2, 1])
