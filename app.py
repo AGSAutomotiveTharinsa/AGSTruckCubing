@@ -1,13 +1,11 @@
 import base64
+import io
 import math
 import re
 import pandas as pd
 import plotly.graph_objects as go
-import requests
+from pypdf import PdfReader
 import streamlit as st
-
-# --- POWER AUTOMATE FLOW ENDPOINT ---
-POWER_AUTOMATE_URL = "https://default9b2f9cbe865b4df8a5848494d8c1ef.f6.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/16/workflows/46a10b2e46d44a40a3a7163624ce59a5/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GiJ6B2AxQl-aCWfJi8Fc66lC-zJyxtqyzM3GMCS0z3Y"
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Trailer Optimization", layout="wide")
@@ -258,7 +256,7 @@ data = {
 
 df = pd.DataFrame(data)
 
-# --- SIDEBAR PDF UPLOADER ---
+# --- SIDEBAR LOCAL PDF UPLOADER ---
 st.sidebar.header("Invoice Auto-Fill")
 pdf_file = st.sidebar.file_uploader("Upload AGS Invoice (PDF)", type=["pdf"])
 
@@ -278,105 +276,60 @@ if "quantities_df" not in st.session_state:
 if "editor_key" not in st.session_state:
     st.session_state.editor_key = 0
 
-# Handle PDF Upload Process via Power Automate HTTP Webhook
+# Fast Local PDF Extraction via pypdf
 if pdf_file is not None:
     if (
         "last_uploaded_pdf" not in st.session_state
         or st.session_state.last_uploaded_pdf != pdf_file.name
     ):
-        with st.sidebar.status(
-            "Processing PDF via Power Automate...", expanded=True
-        ) as status:
+        with st.sidebar.status("Parsing PDF locally...", expanded=True) as status:
             try:
-                # 1. Read PDF and encode bytes to base64 string
-                pdf_bytes = pdf_file.getvalue()
-                base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-
-                # 2. Package into JSON payload expected by Power Automate's HTTP Trigger
-                payload = {
-                    "fileName": pdf_file.name,
-                    "fileContent": base64_pdf,
-                }
-
-                # 3. Post JSON payload
-                response = requests.post(
-                    POWER_AUTOMATE_URL,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                    timeout=120,
+                # 1. Read PDF text directly from uploaded file buffer in memory
+                pdf_reader = PdfReader(io.BytesIO(pdf_file.getvalue()))
+                extracted_text = "\n".join(
+                    [
+                        page.extract_text()
+                        for page in pdf_reader.pages
+                        if page.extract_text()
+                    ]
                 )
 
-                if response.status_code == 200:
-                    extracted_items = response.json()
-                    extracted_counts = {}
+                extracted_counts = {}
 
-                    # Parse direct line text returned via "All detected text lines" bypass
-                    if isinstance(extracted_items, list):
-                        for item in extracted_items:
-                            # Extract text line from payload
-                            line_text = str(
-                                item.get("part_number") or item.get("text", "")
-                            ).upper()
+                # 2. Parse text lines and extract quantity counts per part code
+                for line in extracted_text.splitlines():
+                    line_upper = line.upper()
+                    for part_name in df["PartName"]:
+                        base_code = part_name[:9].upper()
+                        if base_code in line_upper:
+                            numbers = re.findall(r"\b\d+\b", line_upper)
+                            qty = int(numbers[-1]) if numbers else 1
+                            extracted_counts[base_code] = (
+                                extracted_counts.get(base_code, 0) + qty
+                            )
 
-                            if not line_text:
-                                continue
+                # 3. Map extracted quantities to DataFrame order
+                new_quantities = [
+                    extracted_counts.get(p_name[:9].upper(), 0)
+                    for p_name in df["PartName"]
+                ]
 
-                            # Check for matching part numbers in text line
-                            for part_name in df["PartName"]:
-                                base_code = part_name[:9].upper()
-                                if base_code in line_text:
-                                    # Regex search for numeric quantities in line text
-                                    numbers = re.findall(r"\b\d+\b", line_text)
-                                    if numbers:
-                                        # Use detected number or fall back to structured quantity property
-                                        qty = int(numbers[-1])
-                                    else:
-                                        try:
-                                            qty = int(float(item.get("quantity", 1)))
-                                        except (ValueError, TypeError):
-                                            qty = 1
+                st.session_state.quantities_df["PartQuantity"] = new_quantities
+                st.session_state.last_uploaded_pdf = pdf_file.name
+                st.session_state.editor_key += 1
+                pdf_triggered_calc = True
 
-                                    extracted_counts[base_code] = (
-                                        extracted_counts.get(base_code, 0) + qty
-                                    )
-
-                    # Map extracted quantities to DataFrame order
-                    new_quantities = [
-                        extracted_counts.get(p_name[:9].upper(), 0)
-                        for p_name in df["PartName"]
-                    ]
-
-                    st.session_state.quantities_df["PartQuantity"] = (
-                        new_quantities
-                    )
-                    st.session_state.last_uploaded_pdf = pdf_file.name
-                    st.session_state.editor_key += 1
-                    pdf_triggered_calc = True
-
-                    status.update(
-                        label="Invoice extracted successfully!",
-                        state="complete",
-                        expanded=False,
-                    )
-                    st.sidebar.success(
-                        f"Extracted {sum(new_quantities)} total parts!"
-                    )
-                    st.rerun()
-                else:
-                    status.update(
-                        label="Failed to parse PDF",
-                        state="error",
-                        expanded=False,
-                    )
-                    st.sidebar.error(
-                        f"Power Automate Error (HTTP {response.status_code}): {response.text}"
-                    )
+                status.update(
+                    label="Invoice parsed instantly!",
+                    state="complete",
+                    expanded=False,
+                )
+                st.sidebar.success(f"Extracted {sum(new_quantities)} total parts!")
+                st.rerun()
 
             except Exception as e:
-                status.update(
-                    label="Connection Error", state="error", expanded=False
-                )
-                st.sidebar.error(f"Failed to call Power Automate: {e}")
+                status.update(label="PDF Parsing Error", state="error", expanded=False)
+                st.sidebar.error(f"Failed to read PDF: {e}")
 
 # --- CENTERED QUANTITY ENTRY SECTION ---
 left_pad, center_col, right_pad = st.columns([1, 2, 1])
@@ -420,9 +373,7 @@ if calculate_clicked or pdf_triggered_calc:
     selected_parts = df[df["PartQuantity"] > 0].copy()
 
     if selected_parts.empty:
-        st.warning(
-            "Please enter a quantity greater than 0 for at least one part."
-        )
+        st.warning("Please enter a quantity greater than 0 for at least one part.")
         st.stop()
 
     containers_to_pack = []
