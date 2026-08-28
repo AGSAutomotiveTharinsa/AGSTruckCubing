@@ -303,7 +303,7 @@ if pdf_file is not None:
                     POWER_AUTOMATE_URL,
                     json=payload,
                     headers={"Content-Type": "application/json"},
-                    timeout=30,
+                    timeout=120,
                 )
 
                 if response.status_code == 200:
