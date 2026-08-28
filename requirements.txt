@@ -4,3 +4,4 @@ plotly
 py3dbp
 openpyxl
 pdfplumber
+pypdf
