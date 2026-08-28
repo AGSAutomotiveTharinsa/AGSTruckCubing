@@ -276,15 +276,16 @@ if "quantities_df" not in st.session_state:
 if "editor_key" not in st.session_state:
     st.session_state.editor_key = 0
 
-# Fast Local PDF Extraction via pypdf
+if "last_uploaded_pdf" not in st.session_state:
+    st.session_state.last_uploaded_pdf = None
+
+# --- DYNAMIC PDF HANDLING (PARSE OR RESET) ---
 if pdf_file is not None:
-    if (
-        "last_uploaded_pdf" not in st.session_state
-        or st.session_state.last_uploaded_pdf != pdf_file.name
-    ):
+    # If a new PDF is uploaded
+    if st.session_state.last_uploaded_pdf != pdf_file.name:
         with st.sidebar.status("Parsing PDF locally...", expanded=True) as status:
             try:
-                # 1. Read PDF text directly from uploaded file buffer in memory
+                # 1. Read PDF text directly from uploaded file buffer
                 pdf_reader = PdfReader(io.BytesIO(pdf_file.getvalue()))
                 extracted_text = "\n".join(
                     [
@@ -330,6 +331,13 @@ if pdf_file is not None:
             except Exception as e:
                 status.update(label="PDF Parsing Error", state="error", expanded=False)
                 st.sidebar.error(f"Failed to read PDF: {e}")
+else:
+    # If the file was removed/deleted using the 'x' button
+    if st.session_state.last_uploaded_pdf is not None:
+        st.session_state.quantities_df["PartQuantity"] = 0
+        st.session_state.last_uploaded_pdf = None
+        st.session_state.editor_key += 1
+        st.rerun()
 
 # --- CENTERED QUANTITY ENTRY SECTION ---
 left_pad, center_col, right_pad = st.columns([1, 2, 1])
@@ -359,8 +367,7 @@ with center_col:
     with col_clear:
         if st.button("Clear Quantities", use_container_width=True):
             st.session_state.quantities_df["PartQuantity"] = 0
-            if "last_uploaded_pdf" in st.session_state:
-                del st.session_state["last_uploaded_pdf"]
+            st.session_state.last_uploaded_pdf = None
             st.session_state.editor_key += 1
             st.rerun()
 
