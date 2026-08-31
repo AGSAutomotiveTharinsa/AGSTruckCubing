@@ -258,7 +258,7 @@ df = pd.DataFrame(data)
 
 # --- SIDEBAR LOCAL PDF UPLOADER ---
 st.sidebar.header("Invoice Auto-Fill")
-pdf_file = st.sidebar.file_uploader("Upload AGS Invoice (PDF)", type=["pdf"])
+pdf_file = st.sidebar.file_uploader("To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"])
 
 pdf_triggered_calc = False
 
@@ -459,29 +459,29 @@ if calculate_clicked or pdf_triggered_calc:
         )
 
     weight_used_pct = (total_weight / MAX_WEIGHT_KG) * 100
-    col_weight_pct.metric("Max Weight Used", f"{weight_used_pct:.1f}%")
+    col_weight_pct.metric("Weight Usage", f"{weight_used_pct:.1f}%")
 
-    col3.metric("Usable Spatial Fill", f"{fill_percentage:.1f}%")
+    col3.metric("Space Usage", f"{fill_percentage:.1f}%")
     col4.metric("Unpacked Containers", f"{unpacked_count} Units")
 
     st.write("")  # Spacing
 
     if is_weight_ok and is_space_ok:
         st.success(
-            "✅ **TRUCK STATUS: FIT** — All items fit within weight and space limits."
+            "✅ **TRAILER STATUS: FIT** — All items fit within weight and space limits."
         )
     else:
         reasons = []
         if not is_weight_ok:
             reasons.append(
-                f"WEIGHT ({total_weight - MAX_WEIGHT_KG:,.2f} kg over limit)"
+                f"WEIGHT ({total_weight - MAX_WEIGHT_KG:,.2f} kg exceeds limit)"
             )
         if not is_space_ok:
             reasons.append(f"SPACE ({unpacked_count} containers could not fit)")
 
         st.error(f"⚠️ **TRUCK STATUS: OVERLOADED BY {' AND '.join(reasons)}**")
 
-    st.subheader("3. 3D Spatial Layout & Unpacked Summary")
+    st.subheader("3. 3D Layout")
 
     col_plot, col_unpacked = st.columns([6, 4])
 
@@ -505,7 +505,7 @@ if calculate_clicked or pdf_triggered_calc:
                         "part_name": "Part Name",
                         "type": "Container Type",
                         "Unpacked_Containers": "Unpacked Containers",
-                        "Unpacked_Parts_QTY": "Unpacked QTY",
+                        "Unpacked_Parts_QTY": "Unpacked Part QTY",
                     }
                 )
             )
@@ -524,7 +524,7 @@ if calculate_clicked or pdf_triggered_calc:
                     "Unpacked Containers": st.column_config.NumberColumn(
                         "Containers", width="small"
                     ),
-                    "Unpacked QTY": st.column_config.NumberColumn(
+                    "Unpacked Part QTY": st.column_config.NumberColumn(
                         "Qty", width="small"
                     ),
                 },
