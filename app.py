@@ -20,18 +20,12 @@ MAX_WEIGHT_KG = 18824.083  # kg
 
 # --- PACKING ALGORITHM ---
 def pack_truck_realistically(containers_list):
-    """Packs containers into the trailer, grouping by container dimensions so identical box types can stack together."""
     packed_items = []
     unpacked_items = []
 
     groups = {}
     for c in containers_list:
-        key = (
-            c["type"],
-            c["length"],
-            c["width"],
-            c["height"],
-        )
+        key = (c["type"], c["length"], c["width"], c["height"])
         if key not in groups:
             groups[key] = []
         groups[key].append(c)
@@ -77,7 +71,6 @@ def pack_truck_realistically(containers_list):
 
 
 def calculate_fill_percentage(containers_to_pack):
-    """Calculates usable space utilization percentage."""
     if not containers_to_pack:
         return 0.0
 
@@ -97,7 +90,6 @@ def calculate_fill_percentage(containers_to_pack):
 
 
 def plot_3d_truck(packed_items, fill_percentage):
-    """Renders 3D Plot of the trailer layout."""
     fig = go.Figure()
 
     dx, dy, dz = TRAILER_LENGTH, TRAILER_WIDTH, TRAILER_HEIGHT
@@ -408,13 +400,10 @@ data = {
 
 df = pd.DataFrame(data)
 
-# --- SIDEBAR LOCAL PDF UPLOADER ---
-st.sidebar.header("Invoice Auto-Fill")
-pdf_file = st.sidebar.file_uploader(
-    "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
-)
+# --- STATE INITIALIZATION ---
+if "editor_key" not in st.session_state:
+    st.session_state.editor_key = 0
 
-# Session state initializations
 if "quantities_df" not in st.session_state:
     st.session_state.quantities_df = pd.DataFrame(
         {
@@ -425,85 +414,106 @@ if "quantities_df" not in st.session_state:
         }
     )
 
-if "editor_key" not in st.session_state:
-    st.session_state.editor_key = 0
-
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
 
 
-# --- VISUAL PDFPLUMBER TABLE PARSER ---
+# --- SIDEBAR LOCAL PDF UPLOADER ---
+st.sidebar.header("Invoice Auto-Fill")
+pdf_file = st.sidebar.file_uploader(
+    "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
+)
+
 if pdf_file is not None:
     if st.session_state.last_uploaded_pdf != pdf_file.name:
-        with st.sidebar.status("Parsing PDF via pdfplumber...", expanded=True) as status:
-            try:
-                extracted_counts = {}
+        extracted_counts = {}
+        try:
+            with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
+                for page in pdf.pages:
+                    tables = page.extract_tables()
+                    for table in tables:
+                        if not table:
+                            continue
+                        qty_col_idx = None
+                        for row in table:
+                            clean_row = [
+                                str(cell).strip() if cell is not None else ""
+                                for cell in row
+                            ]
 
-                with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
-                    for page in pdf.pages:
-                        tables = page.extract_tables()
+                            for idx, cell_text in enumerate(clean_row):
+                                cell_upper = cell_text.upper()
+                                if (
+                                    "QTY" in cell_upper
+                                    or "QUANTITY" in cell_upper
+                                    or "SHIP" in cell_upper
+                                ):
+                                    qty_col_idx = idx
 
-                        for table in tables:
-                            if not table:
-                                continue
+                            row_str = " ".join(clean_row).upper()
 
-                            qty_col_idx = None
+                            for part_name in df["PartName"]:
+                                base_code = (
+                                    part_name.split("-")[0].strip().upper()
+                                )
 
-                            for row in table:
-                                clean_row = [
-                                    str(cell).strip() if cell is not None else ""
-                                    for cell in row
-                                ]
-
-                                for idx, cell_text in enumerate(clean_row):
-                                    cell_upper = cell_text.upper()
-                                    if "QTY" in cell_upper or "QUANTITY" in cell_upper or "SHIP" in cell_upper:
-                                        qty_col_idx = idx
-
-                                row_str = " ".join(clean_row).upper()
-
-                                for part_name in df["PartName"]:
-                                    base_code = part_name.split("-")[0].strip().upper()
-
-                                    if base_code in row_str:
-                                        if qty_col_idx is not None and qty_col_idx < len(clean_row):
-                                            val_str = re.sub(r"[^\d]", "", clean_row[qty_col_idx])
-                                            if val_str.isdigit():
-                                                val = int(val_str)
-                                                if 0 < val < 50000:
-                                                    extracted_counts[part_name] = val
-                                                    continue
-
-                                        for cell_text in reversed(clean_row):
-                                            if "KG" in cell_text.upper() or "LBS" in cell_text.upper():
+                                if base_code in row_str:
+                                    if qty_col_idx is not None and qty_col_idx < len(
+                                        clean_row
+                                    ):
+                                        val_str = re.sub(
+                                            r"[^\d]", "", clean_row[qty_col_idx]
+                                        )
+                                        if val_str.isdigit():
+                                            val = int(val_str)
+                                            if 0 < val < 50000:
+                                                extracted_counts[part_name] = (
+                                                    val
+                                                )
                                                 continue
-                                            val_str = re.sub(r"[^\d]", "", cell_text)
-                                            if val_str.isdigit():
-                                                val = int(val_str)
-                                                if 0 < val < 50000 and val not in [2024, 2025, 2026, 2027]:
-                                                    extracted_counts[part_name] = val
-                                                    break
 
-                new_quantities = [
-                    extracted_counts.get(p_name, 0) for p_name in df["PartName"]
-                ]
-                st.session_state.quantities_df["PartQuantity"] = new_quantities
-                st.session_state.last_uploaded_pdf = pdf_file.name
-                st.session_state.editor_key += 1
+                                    for cell_text in reversed(clean_row):
+                                        if (
+                                            "KG" in cell_text.upper()
+                                            or "LBS" in cell_text.upper()
+                                        ):
+                                            continue
+                                        val_str = re.sub(
+                                            r"[^\d]", "", cell_text
+                                        )
+                                        if val_str.isdigit():
+                                            val = int(val_str)
+                                            if 0 < val < 50000 and val not in [
+                                                2024,
+                                                2025,
+                                                2026,
+                                                2027,
+                                            ]:
+                                                extracted_counts[part_name] = (
+                                                    val
+                                                )
+                                                break
 
-                status.update(
-                    label="Invoice parsed successfully!",
-                    state="complete",
-                    expanded=False,
-                )
-                st.sidebar.success(
-                    f"Extracted {sum(new_quantities)} total parts across {len([q for q in new_quantities if q > 0])} line items!"
-                )
-                st.rerun()
+            new_quantities = [
+                extracted_counts.get(p_name, 0) for p_name in df["PartName"]
+            ]
 
-            except Exception as e:
-                status.update(label="PDF Parsing Error", state="error", expanded=False)
-                st.sidebar.error(f"Failed to read PDF: {e}")
+            # Re-create state dataframe explicitly
+            st.session_state.quantities_df = pd.DataFrame(
+                {
+                    "PartName": df["PartName"],
+                    "ContainerType": df["ContainerType"],
+                    "MaxPartsPerContainer": df["MaxPartsPerContainer"],
+                    "PartQuantity": new_quantities,
+                }
+            )
+
+            st.session_state.last_uploaded_pdf = pdf_file.name
+            st.session_state.editor_key += 1
+            st.rerun()
+
+        except Exception as e:
+            st.sidebar.error(f"Failed to read PDF: {e}")
 else:
     if st.session_state.last_uploaded_pdf is not None:
         st.session_state.quantities_df["PartQuantity"] = 0
@@ -517,15 +527,15 @@ left_pad, center_col, right_pad = st.columns([1, 2, 1])
 with center_col:
     st.subheader("1. Enter Order Quantities")
 
+    # Dynamic key forces Streamlit to rebuild widget when data changes from code
     edited_df = st.data_editor(
         st.session_state.quantities_df,
-        key=f"data_editor_{st.session_state.editor_key}",
+        key=f"editor_{st.session_state.editor_key}",
         num_rows="fixed",
         disabled=["PartName", "ContainerType", "MaxPartsPerContainer"],
         use_container_width=True,
     )
 
-    # --- BUTTON BAR ---
     col_calc, col_clear = st.columns([3, 2])
 
     with col_calc:
@@ -542,7 +552,7 @@ with center_col:
             st.session_state.editor_key += 1
             st.rerun()
 
-# Sync edited inputs to dataframe
+# Synchronize edited inputs
 st.session_state.quantities_df["PartQuantity"] = edited_df["PartQuantity"]
 df["PartQuantity"] = edited_df["PartQuantity"]
 
@@ -580,7 +590,6 @@ if calculate_clicked:
         remaining_parts = qty
         for i in range(num_containers):
             parts_in_this_box = min(remaining_parts, max_per_container)
-
             box_gross_weight = container_empty_weight + (
                 parts_in_this_box * part_unit_weight
             )
@@ -601,7 +610,6 @@ if calculate_clicked:
             total_weight += box_gross_weight
             remaining_parts -= parts_in_this_box
 
-    # Run packing logic
     packed_items, unpacked_items = pack_truck_realistically(containers_to_pack)
     fill_percentage = calculate_fill_percentage(containers_to_pack)
 
@@ -634,7 +642,7 @@ if calculate_clicked:
     col3.metric("Space Usage", f"{fill_percentage:.1f}%")
     col4.metric("Unpacked Containers", f"{unpacked_count} Units")
 
-    st.write("")  # Spacing
+    st.write("")
 
     if is_weight_ok and is_space_ok:
         st.success(
@@ -684,20 +692,6 @@ if calculate_clicked:
                 summary,
                 use_container_width=True,
                 hide_index=True,
-                column_config={
-                    "Part Name": st.column_config.TextColumn(
-                        "Part Name", width="medium"
-                    ),
-                    "Container Type": st.column_config.TextColumn(
-                        "Type", width="small"
-                    ),
-                    "Unpacked Containers": st.column_config.NumberColumn(
-                        "Containers", width="small"
-                    ),
-                    "Unpacked Part QTY": st.column_config.NumberColumn(
-                        "Qty", width="small"
-                    ),
-                },
             )
         else:
             st.success("All boxes packed successfully!")
