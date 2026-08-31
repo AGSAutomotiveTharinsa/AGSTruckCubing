@@ -438,7 +438,10 @@ if calculate_clicked:
 
     with col_unpacked:
         st.markdown("### ⚠️ Unpacked Items")
-        unpacked_items = [c for c in results["containers_to_pack"] if c not in packed_items]
+        
+        # Get actual unpacked items directly from the packing calculation
+        _, unpacked_items, _ = pack_truck_realistically(results["containers_to_pack"])
+        
         if unpacked_items:
             unpacked_df = pd.DataFrame(unpacked_items)
             summary = (
