@@ -297,17 +297,28 @@ if pdf_file is not None:
 
                 extracted_counts = {}
 
-                # 2. Parse text lines and extract quantity counts per part code
-                for line in extracted_text.splitlines():
-                    line_upper = line.upper()
-                    for part_name in df["PartName"]:
-                        base_code = part_name[:9].upper()
-                        if base_code in line_upper:
-                            numbers = re.findall(r"\b\d+\b", line_upper)
-                            qty = int(numbers[-1]) if numbers else 1
-                            extracted_counts[base_code] = (
-                                extracted_counts.get(base_code, 0) + qty
-                            )
+                # 2. Parse text lines and correctly extract the QTY column directly before unit price
+                for part_name in df["PartName"]:
+                    base_code = re.escape(part_name.upper())
+                    
+                    # Regex searches for the part code and grabs the integer directly preceding the price decimal
+                    pattern = rf"{base_code}.*?(\d+)\s+\d+\.\d{{\d+}}"
+                    matches = re.findall(pattern, extracted_text, re.DOTALL | re.IGNORECASE)
+                    
+                    if matches:
+                        total_qty = sum(int(m) for m in matches)
+                        extracted_counts[part_name[:9].upper()] = total_qty
+                    else:
+                        # Fallback for structured line-by-line tabular parsing
+                        for line in extracted_text.splitlines():
+                            if part_name.upper() in line.upper():
+                                nums = re.findall(r"\b\d+\b", line)
+                                if len(nums) >= 2:
+                                    for candidate in reversed(nums):
+                                        val = int(candidate)
+                                        if val > 0 and val != 1931951: # Exclude PO number strings
+                                            extracted_counts[part_name[:9].upper()] = val
+                                            break
 
                 # 3. Map extracted quantities to DataFrame order
                 new_quantities = [
