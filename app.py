@@ -306,9 +306,9 @@ uploaded_pdfs = st.sidebar.file_uploader(
 
 if uploaded_pdfs:
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Export Invoice Batch")
+    st.sidebar.subheader("📈Export Stats to Excel (.xlsx)")
     
-    if st.sidebar.button("Generate & Compare All PDFs", type="primary"):
+    if st.sidebar.button("Generate Excel Comparison", type="primary"):
         batch_summary_list = []
         
         for pdf_file in uploaded_pdfs:
