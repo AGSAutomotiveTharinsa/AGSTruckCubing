@@ -441,7 +441,6 @@ if pdf_file is not None:
 
                 with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
                     for page in pdf.pages:
-                        # Extract table grid structures directly
                         tables = page.extract_tables()
 
                         for table in tables:
@@ -456,7 +455,6 @@ if pdf_file is not None:
                                     for cell in row
                                 ]
 
-                                # 1. Detect QTY Column Index from header row
                                 for idx, cell_text in enumerate(clean_row):
                                     cell_upper = cell_text.upper()
                                     if "QTY" in cell_upper or "QUANTITY" in cell_upper or "SHIP" in cell_upper:
@@ -464,12 +462,10 @@ if pdf_file is not None:
 
                                 row_str = " ".join(clean_row).upper()
 
-                                # 2. Match part numbers against manifest
                                 for part_name in df["PartName"]:
                                     base_code = part_name.split("-")[0].strip().upper()
 
                                     if base_code in row_str:
-                                        # Use explicit column index if header was found
                                         if qty_col_idx is not None and qty_col_idx < len(clean_row):
                                             val_str = re.sub(r"[^\d]", "", clean_row[qty_col_idx])
                                             if val_str.isdigit():
@@ -478,30 +474,22 @@ if pdf_file is not None:
                                                     extracted_counts[part_name] = val
                                                     continue
 
-                                        # Fallback: Search row cells from right to left for first valid QTY integer
                                         for cell_text in reversed(clean_row):
-                                            # Ignore cells containing weights/units
                                             if "KG" in cell_text.upper() or "LBS" in cell_text.upper():
                                                 continue
                                             val_str = re.sub(r"[^\d]", "", cell_text)
                                             if val_str.isdigit():
                                                 val = int(val_str)
-                                                # Filter out dates, years, and large sequence IDs
                                                 if 0 < val < 50000 and val not in [2024, 2025, 2026, 2027]:
                                                     extracted_counts[part_name] = val
                                                     break
 
-                # Map extracted counts to dataframe structure
                 new_quantities = [
                     extracted_counts.get(p_name, 0) for p_name in df["PartName"]
                 ]
                 st.session_state.quantities_df["PartQuantity"] = new_quantities
                 st.session_state.last_uploaded_pdf = pdf_file.name
-
-                # Increment key and update editor state BEFORE rerun to force UI sync
                 st.session_state.editor_key += 1
-                new_editor_key = f"data_editor_{st.session_state.editor_key}"
-                st.session_state[new_editor_key] = st.session_state.quantities_df.copy()
 
                 status.update(
                     label="Invoice parsed successfully!",
