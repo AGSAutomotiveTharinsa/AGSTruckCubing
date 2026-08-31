@@ -444,7 +444,7 @@ if calculate_clicked or pdf_triggered_calc:
     st.markdown("---")
     st.subheader("2. Load & Fit Diagnostics")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col_weight_pct, col3, col4 = st.columns(5)
     col1.metric("Total Containers", f"{total_requested} Units")
 
     weight_margin = MAX_WEIGHT_KG - total_weight
@@ -457,6 +457,9 @@ if calculate_clicked or pdf_triggered_calc:
             f"</div>",
             unsafe_allow_html=True,
         )
+
+    weight_used_pct = (total_weight / MAX_WEIGHT_KG) * 100
+    col_weight_pct.metric("Max Weight Used", f"{weight_used_pct:.1f}%")
 
     col3.metric("Usable Spatial Fill", f"{fill_percentage:.1f}%")
     col4.metric("Unpacked Containers", f"{unpacked_count} Units")
