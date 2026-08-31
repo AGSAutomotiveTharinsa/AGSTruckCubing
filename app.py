@@ -3,8 +3,8 @@ import io
 import math
 import re
 import pandas as pd
+import pdfplumber
 import plotly.graph_objects as go
-from pypdf import PdfReader
 import streamlit as st
 
 # --- PAGE SETUP ---
@@ -414,8 +414,6 @@ pdf_file = st.sidebar.file_uploader(
     "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
 )
 
-pdf_triggered_calc = False
-
 # Session state initializations
 if "quantities_df" not in st.session_state:
     st.session_state.quantities_df = pd.DataFrame(
@@ -433,88 +431,77 @@ if "editor_key" not in st.session_state:
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
 
-# --- ROBUST PYPDF SPATIAL PARSER ---
+
+# --- VISUAL PDFPLUMBER TABLE PARSER ---
 if pdf_file is not None:
     if st.session_state.last_uploaded_pdf != pdf_file.name:
-        with st.sidebar.status("Parsing PDF via PyPDF...", expanded=True) as status:
+        with st.sidebar.status("Parsing PDF via pdfplumber...", expanded=True) as status:
             try:
-                reader = PdfReader(io.BytesIO(pdf_file.getvalue()))
                 extracted_counts = {}
 
-                # Loop through pages and extract formatted visual layout text
-                for page in reader.pages:
-                    # Extract layout mode preserves spatial spacing and columns
-                    layout_text = page.extract_text(layout="layout")
-                    if not layout_text:
-                        layout_text = page.extract_text()
-                    if not layout_text:
-                        continue
+                with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
+                    for page in pdf.pages:
+                        # Extract table grid structures directly
+                        tables = page.extract_tables()
 
-                    lines = layout_text.splitlines()
+                        for table in tables:
+                            if not table:
+                                continue
 
-                    for line in lines:
-                        # Clean multiple spaces down to single spaces for pattern matching
-                        clean_line = " ".join(line.split())
-                        if not clean_line:
-                            continue
+                            qty_col_idx = None
 
-                        # Check for matching Part Name
-                        for part_name in df["PartName"]:
-                            base_code = part_name.split("-")[0].strip().upper()
+                            for row in table:
+                                clean_row = [
+                                    str(cell).strip() if cell is not None else ""
+                                    for cell in row
+                                ]
 
-                            if base_code in clean_line.upper():
-                                # 1. Try inline row pattern: PART_NO ... [KG/WGT] ... QTY
-                                # Captures the trailing numeric token on the same visual line
-                                tokens = clean_line.split()
-                                numeric_tokens = []
-                                for tok in tokens:
-                                    # Strip commas or symbols from numbers
-                                    clean_tok = re.sub(r"[^\d]", "", tok)
-                                    if clean_tok.isdigit():
-                                        val = int(clean_tok)
-                                        # Exclude years or header codes
-                                        if val > 0 and val not in [
-                                            2024,
-                                            2025,
-                                            2026,
-                                            2027,
-                                        ]:
-                                            numeric_tokens.append(val)
+                                # 1. Detect QTY Column Index from header row
+                                for idx, cell_text in enumerate(clean_row):
+                                    cell_upper = cell_text.upper()
+                                    if "QTY" in cell_upper or "QUANTITY" in cell_upper or "SHIP" in cell_upper:
+                                        qty_col_idx = idx
 
-                                if numeric_tokens:
-                                    # In standard invoice layouts, quantity is the final integer on the line
-                                    extracted_counts[part_name] = numeric_tokens[-1]
+                                row_str = " ".join(clean_row).upper()
 
-                # Fallback: Sequential block matching if layout mode was unavailable
-                if not extracted_counts:
-                    raw_text = "\n".join(
-                        [p.extract_text() for p in reader.pages if p.extract_text()]
-                    )
-                    # Remove date and invoice header noise
-                    raw_text = re.sub(r"\d{2}/\d{2}/\d{4}", "", raw_text)
-                    raw_text = re.sub(r"\b202\d[/-]\d+\b", "", raw_text)
-                    raw_text = re.sub(
-                        r"\b\d+\s*KG\b", "", raw_text, flags=re.IGNORECASE
-                    )
+                                # 2. Match part numbers against manifest
+                                for part_name in df["PartName"]:
+                                    base_code = part_name.split("-")[0].strip().upper()
 
-                    for line in raw_text.splitlines():
-                        clean_line = " ".join(line.split())
-                        for part_name in df["PartName"]:
-                            base_code = part_name.split("-")[0].strip().upper()
-                            if base_code in clean_line.upper():
-                                nums = re.findall(r"\b\d+\b", clean_line)
-                                if nums:
-                                    extracted_counts[part_name] = int(nums[-1])
+                                    if base_code in row_str:
+                                        # Use explicit column index if header was found
+                                        if qty_col_idx is not None and qty_col_idx < len(clean_row):
+                                            val_str = re.sub(r"[^\d]", "", clean_row[qty_col_idx])
+                                            if val_str.isdigit():
+                                                val = int(val_str)
+                                                if 0 < val < 50000:
+                                                    extracted_counts[part_name] = val
+                                                    continue
 
-                # Map extracted values to DataFrame order
+                                        # Fallback: Search row cells from right to left for first valid QTY integer
+                                        for cell_text in reversed(clean_row):
+                                            # Ignore cells containing weights/units
+                                            if "KG" in cell_text.upper() or "LBS" in cell_text.upper():
+                                                continue
+                                            val_str = re.sub(r"[^\d]", "", cell_text)
+                                            if val_str.isdigit():
+                                                val = int(val_str)
+                                                # Filter out dates, years, and large sequence IDs
+                                                if 0 < val < 50000 and val not in [2024, 2025, 2026, 2027]:
+                                                    extracted_counts[part_name] = val
+                                                    break
+
+                # Map extracted counts to dataframe structure
                 new_quantities = [
                     extracted_counts.get(p_name, 0) for p_name in df["PartName"]
                 ]
-
                 st.session_state.quantities_df["PartQuantity"] = new_quantities
                 st.session_state.last_uploaded_pdf = pdf_file.name
+
+                # Increment key and update editor state BEFORE rerun to force UI sync
                 st.session_state.editor_key += 1
-                pdf_triggered_calc = True
+                new_editor_key = f"data_editor_{st.session_state.editor_key}"
+                st.session_state[new_editor_key] = st.session_state.quantities_df.copy()
 
                 status.update(
                     label="Invoice parsed successfully!",
@@ -527,9 +514,7 @@ if pdf_file is not None:
                 st.rerun()
 
             except Exception as e:
-                status.update(
-                    label="PDF Parsing Error", state="error", expanded=False
-                )
+                status.update(label="PDF Parsing Error", state="error", expanded=False)
                 st.sidebar.error(f"Failed to read PDF: {e}")
 else:
     if st.session_state.last_uploaded_pdf is not None:
@@ -569,18 +554,16 @@ with center_col:
             st.session_state.editor_key += 1
             st.rerun()
 
-# Sync inputs
+# Sync edited inputs to dataframe
 st.session_state.quantities_df["PartQuantity"] = edited_df["PartQuantity"]
 df["PartQuantity"] = edited_df["PartQuantity"]
 
 # --- CALCULATION AND PLOTTING ---
-if calculate_clicked or pdf_triggered_calc:
+if calculate_clicked:
     selected_parts = df[df["PartQuantity"] > 0].copy()
 
     if selected_parts.empty:
-        st.warning(
-            "Please enter a quantity greater than 0 for at least one part."
-        )
+        st.warning("Please enter a quantity greater than 0 for at least one part.")
         st.stop()
 
     containers_to_pack = []
