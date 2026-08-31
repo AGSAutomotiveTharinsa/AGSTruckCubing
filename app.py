@@ -377,45 +377,35 @@ def pack_truck_realistically(containers_list):
     
     return packed_items, unpacked_items, remaining_length
 
-
 def calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, remaining_length):
-    """
-    Calculates practical usable space percentage by accounting for geometric packing constraints 
-    (unusable width/height margins) and physical container fitting capacity.
-    """
     if not containers_to_pack:
         return 0.0
 
-    # Total volume of packed items
-    packed_volume = sum(
-        c["length"] * c["width"] * c["height"] for c in packed_items
-    )
-
-    # 1. If containers were left unpacked due to spatial limits, truck is physically full (100%)
+    # 1. If containers were left unpacked due to space, trailer is at 100% capacity
     if unpacked_items:
         return 100.0
 
-    # Get dimensions of candidate containers in system
     min_c_len = min(c["length"] for c in containers_to_pack)
-    min_c_wid = min(c["width"] for c in containers_to_pack)
 
-    # 2. If no remaining floor space can fit even the smallest container in length, trailer is full
+    # 2. If the trailer length is fully occupied (cannot fit another container row), it is 100% full
     if remaining_length < min_c_len:
-        # Calculate theoretical max usable grid volume based on packed layout bounds
-        # Average top height constraint
-        avg_stacked_height = sum(c["height"] * max(1, math.floor(TRAILER_HEIGHT / c["height"])) for c in containers_to_pack) / len(containers_to_pack)
-        
-        # Determine usable layout width based on average row configuration
-        usable_width = sum(c["width"] * math.floor(TRAILER_WIDTH / c["width"]) for c in containers_to_pack) / len(containers_to_pack)
-        
-        effective_max_volume = TRAILER_LENGTH * usable_width * avg_stacked_height
-        
-        fill_pct = (packed_volume / effective_max_volume) * 100.0
-        return min(100.0, fill_pct)
+        return 100.0
 
-    # 3. Standard volumetric calculation if significant space remains
-    total_trailer_volume = TRAILER_LENGTH * TRAILER_WIDTH * TRAILER_HEIGHT
-    return (packed_volume / total_trailer_volume) * 100.0
+    # 3. Partial load calculation for trucks with remaining length
+    packed_volume = sum(c["length"] * c["width"] * c["height"] for c in packed_items)
+    
+    # Calculate usable cross-sectional area based on box geometry
+    avg_stacked_h = sum(c["height"] * math.floor(TRAILER_HEIGHT / c["height"]) for c in containers_to_pack) / len(containers_to_pack)
+    avg_row_w = sum(c["width"] * math.floor(TRAILER_WIDTH / c["width"]) for c in containers_to_pack) / len(containers_to_pack)
+    
+    usable_total_volume = TRAILER_LENGTH * avg_row_w * avg_stacked_h
+    
+    return min(100.0, (packed_volume / usable_total_volume) * 100.0)
+
+
+
+
+
 
 
 def plot_3d_truck(packed_items, fill_percentage):
