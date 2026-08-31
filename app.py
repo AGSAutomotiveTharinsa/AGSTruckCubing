@@ -483,11 +483,11 @@ def plot_3d_truck(packed_items, fill_percentage):
         )
 
     status_color = "red" if fill_percentage > 100 else "green"
-    status_label = "OVERLOADED" if fill_percentage > 100 else "CAPACITY OK"
+    status_label = "OVERLOADED" if fill_percentage > 100 else "SPACE OK"
 
     fig.update_layout(
         title=dict(
-            text=f"<b>Trailer Usable Fill: <span style='color:{status_color};'>{fill_percentage:.1f}%</span> ({status_label})</b>",
+            text=f"<b>Trailer Space Usage: <span style='color:{status_color};'>{fill_percentage:.1f}%</span> ({status_label})</b>",
             x=0.01,
             y=0.95,
             font=dict(size=18),
