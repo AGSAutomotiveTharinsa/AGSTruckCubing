@@ -246,8 +246,8 @@ if "quantities_df" not in st.session_state:
 
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
-    
-# --- SIDEBAR & PDF PARSING (REPLACEMENT BLOCK) ---
+
+# --- SIDEBAR & PDF PARSING ---
 st.sidebar.header("Invoice Auto-Fill")
 pdf_file = st.sidebar.file_uploader(
     "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
@@ -268,41 +268,42 @@ elif st.session_state.last_uploaded_pdf != pdf_file.name:
         with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
             for page_idx, page in enumerate(pdf.pages):
                 raw_text = page.extract_text() or ""
-                
-                # Fix spaced characters (e.g., "F C 1 1 0 0" -> "FC1100", "8 0 0" -> "800")
-                # Collapse single character spaces while preserving multi-space layout separators
-                compact_text = re.sub(r'(?<=\b[A-Z0-9])\s+(?=[A-Z0-9]\b)', '', raw_text.upper())
-                
-                # Split into clean, non-empty lines
-                lines = [l.strip() for l in compact_text.split('\n') if l.strip()]
+                compact_text = re.sub(
+                    r"(?<=\b[A-Z0-9])\s+(?=[A-Z0-9]\b)", "", raw_text.upper()
+                )
+                lines = [
+                    l.strip() for l in compact_text.split("\n") if l.strip()
+                ]
 
                 for line in lines:
                     for part_name in df_manifest["PartName"]:
                         base_code = part_name.split("-")[0].strip().upper()
-                        
-                        # Match base part code in line
                         if base_code in line:
-                            # Standard layout pattern: Target numbers following 'KG' or 'EA'
-                            # Matches quantity numbers between 1 and 50,000
-                            match = re.search(r'(?:KG|EA)\s*(\d{1,5})\b', line)
-                            
+                            match = re.search(r"(?:KG|EA)\s*(\d{1,5})\b", line)
                             if match:
                                 qty = int(match.group(1))
                                 extracted_counts[part_name] = qty
-                                debug_log.append(f"P{page_idx+1} -> {part_name}: {qty}")
+                                debug_log.append(
+                                    f"P{page_idx+1} -> {part_name}: {qty}"
+                                )
                             else:
-                                # Fallback: Find all integer groups and grab the realistic quantity candidate
-                                numbers = [int(n) for n in re.findall(r'\b\d+\b', line)]
+                                numbers = [
+                                    int(n) for n in re.findall(r"\b\d+\b", line)
+                                ]
                                 valid_qtys = [
-                                    n for n in numbers 
-                                    if n not in [2024, 2025, 2026, 2027, 8708] and 0 < n < 50000
+                                    n
+                                    for n in numbers
+                                    if n
+                                    not in [2024, 2025, 2026, 2027, 8708]
+                                    and 0 < n < 50000
                                 ]
                                 if valid_qtys:
                                     qty = valid_qtys[-1]
                                     extracted_counts[part_name] = qty
-                                    debug_log.append(f"P{page_idx+1} (fallback) -> {part_name}: {qty}")
+                                    debug_log.append(
+                                        f"P{page_idx+1} (fallback) -> {part_name}: {qty}"
+                                    )
 
-        # Update Session State Dataframe
         new_quantities = [
             extracted_counts.get(p_name, 0) for p_name in df_manifest["PartName"]
         ]
@@ -314,18 +315,12 @@ elif st.session_state.last_uploaded_pdf != pdf_file.name:
     except Exception as e:
         st.sidebar.error(f"Failed to read PDF: {e}")
 
-# Sidebar Feedback Display
 if pdf_file is not None and st.session_state.last_uploaded_pdf == pdf_file.name:
     total_found = (st.session_state.quantities_df["PartQuantity"] > 0).sum()
     if total_found > 0:
         st.sidebar.success(f"✅ Extracted quantities for {total_found} parts!")
     else:
         st.sidebar.warning("⚠️ Could not match quantities to part codes.")
-
-
-
-
-
 
 
 # --- PACKING ALGORITHM FUNCTIONS ---
@@ -377,26 +372,50 @@ def pack_truck_realistically(containers_list):
             current_row_length = max(current_row_length, l)
             current_y += w
 
-    return packed_items, unpacked_items
+    # Calculate remaining dimensions at trailer end and side
+    remaining_length = max(0.0, TRAILER_LENGTH - (current_x + current_row_length))
+    
+    return packed_items, unpacked_items, remaining_length
 
 
-def calculate_fill_percentage(containers_to_pack):
+def calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, remaining_length):
+    """
+    Calculates practical usable space percentage by accounting for geometric packing constraints 
+    (unusable width/height margins) and physical container fitting capacity.
+    """
     if not containers_to_pack:
         return 0.0
 
-    total_requested_vol = sum(
-        c["length"] * c["width"] * c["height"] for c in containers_to_pack
+    # Total volume of packed items
+    packed_volume = sum(
+        c["length"] * c["width"] * c["height"] for c in packed_items
     )
 
-    avg_top_gap = sum(
-        (TRAILER_HEIGHT % c["height"]) for c in containers_to_pack
-    ) / len(containers_to_pack)
-    usable_height_capacity = TRAILER_HEIGHT - avg_top_gap
-    effective_usable_capacity = (
-        TRAILER_LENGTH * TRAILER_WIDTH * usable_height_capacity
-    )
+    # 1. If containers were left unpacked due to spatial limits, truck is physically full (100%)
+    if unpacked_items:
+        return 100.0
 
-    return (total_requested_vol / effective_usable_capacity) * 100
+    # Get dimensions of candidate containers in system
+    min_c_len = min(c["length"] for c in containers_to_pack)
+    min_c_wid = min(c["width"] for c in containers_to_pack)
+
+    # 2. If no remaining floor space can fit even the smallest container in length, trailer is full
+    if remaining_length < min_c_len:
+        # Calculate theoretical max usable grid volume based on packed layout bounds
+        # Average top height constraint
+        avg_stacked_height = sum(c["height"] * max(1, math.floor(TRAILER_HEIGHT / c["height"])) for c in containers_to_pack) / len(containers_to_pack)
+        
+        # Determine usable layout width based on average row configuration
+        usable_width = sum(c["width"] * math.floor(TRAILER_WIDTH / c["width"]) for c in containers_to_pack) / len(containers_to_pack)
+        
+        effective_max_volume = TRAILER_LENGTH * usable_width * avg_stacked_height
+        
+        fill_pct = (packed_volume / effective_max_volume) * 100.0
+        return min(100.0, fill_pct)
+
+    # 3. Standard volumetric calculation if significant space remains
+    total_trailer_volume = TRAILER_LENGTH * TRAILER_WIDTH * TRAILER_HEIGHT
+    return (packed_volume / total_trailer_volume) * 100.0
 
 
 def plot_3d_truck(packed_items, fill_percentage):
@@ -502,7 +521,6 @@ left_pad, center_col, right_pad = st.columns([1, 2, 1])
 with center_col:
     st.subheader("1. Enter Order Quantities")
 
-    # Render data editor using current session state directly
     edited_df = st.data_editor(
         st.session_state.quantities_df,
         key=f"editor_widget_{st.session_state.editor_key}",
@@ -511,7 +529,6 @@ with center_col:
         use_container_width=True,
     )
 
-    # Directly save manual edits into session state
     st.session_state.quantities_df = edited_df
 
     col_calc, col_clear = st.columns([3, 2])
@@ -532,7 +549,6 @@ with center_col:
 
 # --- CALCULATION AND PLOTTING ---
 if calculate_clicked:
-    # Merge current quantities with full manifest specs
     working_df = df_manifest.copy()
     working_df["PartQuantity"] = st.session_state.quantities_df[
         "PartQuantity"
@@ -590,8 +606,12 @@ if calculate_clicked:
             total_weight += box_gross_weight
             remaining_parts -= parts_in_this_box
 
-    packed_items, unpacked_items = pack_truck_realistically(containers_to_pack)
-    fill_percentage = calculate_fill_percentage(containers_to_pack)
+    packed_items, unpacked_items, remaining_length = pack_truck_realistically(
+        containers_to_pack
+    )
+    fill_percentage = calculate_fill_percentage(
+        containers_to_pack, packed_items, unpacked_items, remaining_length
+    )
 
     total_requested = len(containers_to_pack)
     unpacked_count = len(unpacked_items)
