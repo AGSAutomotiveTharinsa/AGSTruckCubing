@@ -247,13 +247,12 @@ if "quantities_df" not in st.session_state:
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
     
-# --- SIDEBAR & PDF PARSING (STATE-FIXED BLOCK) ---
+# --- SIDEBAR & PDF PARSING (MULTI-PAGE & UNLIMITED TEXT BLOCK) ---
 st.sidebar.header("Invoice Auto-Fill")
 pdf_file = st.sidebar.file_uploader(
     "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
 )
 
-# 1. Reset state if the user removes the file
 if pdf_file is None:
     if st.session_state.last_uploaded_pdf is not None:
         st.session_state.quantities_df["PartQuantity"] = 0
@@ -261,15 +260,16 @@ if pdf_file is None:
         st.session_state.editor_key += 1
         st.rerun()
 
-# 2. Process PDF only when a NEW file is uploaded
 elif st.session_state.last_uploaded_pdf != pdf_file.name:
     extracted_counts = {}
     debug_log = []
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
-            for page in pdf.pages:
+            # Iterate through ALL pages in the PDF document
+            for page_idx, page in enumerate(pdf.pages):
                 raw_text = page.extract_text() or ""
+
                 for line in raw_text.split("\n"):
                     clean_line = line.upper().strip()
 
@@ -277,7 +277,7 @@ elif st.session_state.last_uploaded_pdf != pdf_file.name:
                         base_code = part_name.split("-")[0].strip().upper()
 
                         if base_code in clean_line:
-                            # Grab digits from the line
+                            # Extract integer strings
                             numbers = re.findall(r"\b\d+\b", clean_line)
                             valid_qtys = [
                                 int(n)
@@ -288,41 +288,34 @@ elif st.session_state.last_uploaded_pdf != pdf_file.name:
                             if valid_qtys:
                                 qty = valid_qtys[-1]
                                 extracted_counts[part_name] = qty
-                                debug_log.append(f"{part_name}: {qty}")
+                                debug_log.append(
+                                    f"P{page_idx+1} -> {part_name}: {qty}"
+                                )
 
-        # Update dataframe values in state
         new_quantities = [
             extracted_counts.get(p_name, 0) for p_name in df_manifest["PartName"]
         ]
         st.session_state.quantities_df["PartQuantity"] = new_quantities
-
-        # Lock the uploaded file name so it doesn't re-trigger
         st.session_state.last_uploaded_pdf = pdf_file.name
         st.session_state.editor_key += 1
-
-        # Force a single refresh to push new quantities into st.data_editor
         st.rerun()
 
     except Exception as e:
         st.sidebar.error(f"Failed to read PDF: {e}")
 
-# 3. Sidebar feedback display (persists across reruns)
+# Persistent Feedback & Complete Text Viewer
 if pdf_file is not None and st.session_state.last_uploaded_pdf == pdf_file.name:
     total_found = (st.session_state.quantities_df["PartQuantity"] > 0).sum()
     if total_found > 0:
-        st.sidebar.success(f"✅ Successfully matched {total_found} part items!")
+        st.sidebar.success(f"✅ Matched {total_found} part items!")
     else:
-        st.sidebar.warning(
-            "⚠️ No matching Part Numbers found. Expand below to see PDF text."
-        )
-        with st.sidebar.expander("View PDF Raw Text"):
+        st.sidebar.warning("⚠️ No matching Part Numbers found.")
+        with st.sidebar.expander("View Complete PDF Text"):
             try:
                 with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
-                    st.text(
-                        (pdf.pages[0].extract_text() or "No readable text found")[
-                            :1000
-                        ]
-                    )
+                    for i, page in enumerate(pdf.pages):
+                        st.markdown(f"**--- Page {i+1} ---**")
+                        st.text(page.extract_text() or "Empty page")
             except Exception:
                 st.write("Could not render text preview.")
 
