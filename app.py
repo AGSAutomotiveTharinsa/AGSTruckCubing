@@ -246,104 +246,74 @@ if "quantities_df" not in st.session_state:
 
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
-
-# --- SIDEBAR & PDF PARSING (MUST RUN BEFORE MAIN BODY WIDGETS) ---
+    
+# --- SIDEBAR & PDF PARSING (REPLACEMENT BLOCK) ---
 st.sidebar.header("Invoice Auto-Fill")
-pdf_file = st.sidebar.file_uploader(
-    "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
-)
+pdf_file = st.sidebar.file_uploader("To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"])
 
 if pdf_file is not None:
     if st.session_state.last_uploaded_pdf != pdf_file.name:
         extracted_counts = {}
+        debug_log = []
+        
         try:
             with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
-                for page in pdf.pages:
-                    tables = page.extract_tables()
-                    for table in tables:
-                        if not table:
-                            continue
-                        qty_col_idx = None
-                        for row in table:
-                            clean_row = [
-                                str(cell).strip() if cell is not None else ""
-                                for cell in row
-                            ]
+                for page_num, page in enumerate(pdf.pages):
+                    # 1. Extract raw text as fallback for borderless tables
+                    raw_text = page.extract_text() or ""
+                    
+                    # 2. Extract structured tables if present
+                    tables = page.extract_tables() or []
+                    
+                    # Process every line in raw text
+                    for line in raw_text.split("\n"):
+                        clean_line = line.upper().strip()
+                        
+                        for part_name in df_manifest["PartName"]:
+                            # Extract base part string (e.g., "GM1121ACA" from "GM1121ACA")
+                            base_code = part_name.split("-")[0].strip().upper()
+                            
+                            if base_code in clean_line:
+                                # Look for numbers in the line that represent quantities
+                                numbers = re.findall(r'\b\d+\b', clean_line)
+                                # Filter out common part-number fragments, dates, or years
+                                valid_qtys = [
+                                    int(n) for n in numbers 
+                                    if int(n) not in [2024, 2025, 2026, 2027] and 0 < int(n) < 50000
+                                ]
+                                
+                                if valid_qtys:
+                                    # Pick the quantity candidate (usually the largest or last integer on the line)
+                                    qty = valid_qtys[-1]
+                                    extracted_counts[part_name] = qty
+                                    debug_log.append(f"Found {part_name}: {qty}")
 
-                            for idx, cell_text in enumerate(clean_row):
-                                cell_upper = cell_text.upper()
-                                if (
-                                    "QTY" in cell_upper
-                                    or "QUANTITY" in cell_upper
-                                    or "SHIP" in cell_upper
-                                ):
-                                    qty_col_idx = idx
+            # Fallback check if nothing matched
+            if not extracted_counts:
+                st.sidebar.warning("⚠️ PDF read, but no matching Part Numbers were found. Check debug text below.")
+                with st.sidebar.expander("View Raw PDF Text Preview"):
+                    with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
+                        st.text((pdf.pages[0].extract_text() or "No readable text found")[:1000])
+            else:
+                st.sidebar.success(f"Matched {len(extracted_counts)} parts!")
+                with st.sidebar.expander("Extracted Details"):
+                    for log in debug_log:
+                        st.write(log)
 
-                            row_str = " ".join(clean_row).upper()
-
-                            for part_name in df_manifest["PartName"]:
-                                base_code = (
-                                    part_name.split("-")[0].strip().upper()
-                                )
-
-                                if base_code in row_str:
-                                    if qty_col_idx is not None and qty_col_idx < len(
-                                        clean_row
-                                    ):
-                                        val_str = re.sub(
-                                            r"[^\d]", "", clean_row[qty_col_idx]
-                                        )
-                                        if val_str.isdigit():
-                                            val = int(val_str)
-                                            if 0 < val < 50000:
-                                                extracted_counts[part_name] = (
-                                                    val
-                                                )
-                                                continue
-
-                                    for cell_text in reversed(clean_row):
-                                        if (
-                                            "KG" in cell_text.upper()
-                                            or "LBS" in cell_text.upper()
-                                        ):
-                                            continue
-                                        val_str = re.sub(
-                                            r"[^\d]", "", cell_text
-                                        )
-                                        if val_str.isdigit():
-                                            val = int(val_str)
-                                            if 0 < val < 50000 and val not in [
-                                                2024,
-                                                2025,
-                                                2026,
-                                                2027,
-                                            ]:
-                                                extracted_counts[part_name] = (
-                                                    val
-                                                )
-                                                break
-
+            # Map extracted quantities back to main array
             new_quantities = [
-                extracted_counts.get(p_name, 0)
-                for p_name in df_manifest["PartName"]
+                extracted_counts.get(p_name, 0) for p_name in df_manifest["PartName"]
             ]
 
-            # Re-create session dataframe directly before UI initialization
-            st.session_state.quantities_df = pd.DataFrame(
-                {
-                    "PartName": df_manifest["PartName"],
-                    "ContainerType": df_manifest["ContainerType"],
-                    "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
-                    "PartQuantity": new_quantities,
-                }
-            )
-
+            # Force state update and widget key increment
+            st.session_state.quantities_df["PartQuantity"] = new_quantities
             st.session_state.last_uploaded_pdf = pdf_file.name
             st.session_state.editor_key += 1
             st.rerun()
 
         except Exception as e:
             st.sidebar.error(f"Failed to read PDF: {e}")
+
 else:
     if st.session_state.last_uploaded_pdf is not None:
         st.session_state.quantities_df["PartQuantity"] = 0
