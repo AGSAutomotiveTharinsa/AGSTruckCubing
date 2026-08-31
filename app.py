@@ -1,4 +1,3 @@
-import base64
 import io
 import math
 import re
@@ -17,177 +16,8 @@ TRAILER_WIDTH = 102.0  # inches (Y-axis)
 TRAILER_HEIGHT = 110.0  # inches (Z-axis)
 MAX_WEIGHT_KG = 18824.083  # kg
 
-
-# --- PACKING ALGORITHM ---
-def pack_truck_realistically(containers_list):
-    packed_items = []
-    unpacked_items = []
-
-    groups = {}
-    for c in containers_list:
-        key = (c["type"], c["length"], c["width"], c["height"])
-        if key not in groups:
-            groups[key] = []
-        groups[key].append(c)
-
-    sorted_group_keys = sorted(
-        groups.keys(), key=lambda k: (k[1], k[2], k[3]), reverse=True
-    )
-
-    current_x = 0.0
-    current_y = 0.0
-    current_row_length = 0.0
-
-    for key in sorted_group_keys:
-        items = groups[key]
-        c_type, l, w, h = key
-
-        max_stack_z = max(1, math.floor(TRAILER_HEIGHT / h))
-        item_index = 0
-        total_group_items = len(items)
-
-        while item_index < total_group_items:
-            if current_y + w > TRAILER_WIDTH:
-                current_x += current_row_length
-                current_y = 0.0
-                current_row_length = 0.0
-
-            if current_x + l > TRAILER_LENGTH:
-                unpacked_items.extend(items[item_index:])
-                break
-
-            stack_count = min(total_group_items - item_index, max_stack_z)
-
-            for z_idx in range(stack_count):
-                curr_item = items[item_index]
-                pos = (current_x, current_y, z_idx * h)
-                packed_items.append({**curr_item, "position": pos})
-                item_index += 1
-
-            current_row_length = max(current_row_length, l)
-            current_y += w
-
-    return packed_items, unpacked_items
-
-
-def calculate_fill_percentage(containers_to_pack):
-    if not containers_to_pack:
-        return 0.0
-
-    total_requested_vol = sum(
-        c["length"] * c["width"] * c["height"] for c in containers_to_pack
-    )
-
-    avg_top_gap = sum(
-        (TRAILER_HEIGHT % c["height"]) for c in containers_to_pack
-    ) / len(containers_to_pack)
-    usable_height_capacity = TRAILER_HEIGHT - avg_top_gap
-    effective_usable_capacity = (
-        TRAILER_LENGTH * TRAILER_WIDTH * usable_height_capacity
-    )
-
-    return (total_requested_vol / effective_usable_capacity) * 100
-
-
-def plot_3d_truck(packed_items, fill_percentage):
-    fig = go.Figure()
-
-    dx, dy, dz = TRAILER_LENGTH, TRAILER_WIDTH, TRAILER_HEIGHT
-    fig.add_trace(
-        go.Scatter3d(
-            x=[0, dx, dx, 0, 0, 0, dx, dx, 0, 0, 0, 0, dx, dx, dx, dx],
-            y=[0, 0, dy, dy, 0, 0, 0, dy, dy, 0, dy, dy, dy, dy, 0, 0],
-            z=[0, 0, 0, 0, 0, dz, dz, dz, dz, dz, dz, 0, 0, dz, dz, 0],
-            mode="lines",
-            line=dict(color="black", width=5),
-            name="Trailer Boundary",
-        )
-    )
-
-    color_map = {}
-    colors = [
-        "royalblue",
-        "crimson",
-        "forestgreen",
-        "darkorange",
-        "purple",
-        "teal",
-        "gold",
-    ]
-
-    for item in packed_items:
-        c_type = item["type"]
-        if c_type not in color_map:
-            color_map[c_type] = colors[len(color_map) % len(colors)]
-
-        x0, y0, z0 = item["position"]
-        d, w, h = item["length"], item["width"], item["height"]
-
-        x = [x0, x0 + d, x0 + d, x0, x0, x0 + d, x0 + d, x0]
-        y = [y0, y0, y0 + w, y0 + w, y0, y0, y0 + w, y0 + w]
-        z = [z0, z0, z0, z0, z0 + h, z0 + h, z0 + h, z0 + h]
-
-        i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
-        j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
-        k = [0, 7, 5, 3, 6, 7, 1, 1, 5, 5, 7, 6]
-
-        fig.add_trace(
-            go.Mesh3d(
-                x=x,
-                y=y,
-                z=z,
-                i=i,
-                j=j,
-                k=k,
-                color=color_map[c_type],
-                opacity=0.75,
-                lighting=dict(ambient=0.8, diffuse=0.8),
-                flatshading=True,
-                name=f"{item['part_name']} ({c_type})",
-                hoverinfo="name",
-            )
-        )
-
-    status_color = "red" if fill_percentage > 100 else "green"
-    status_label = "OVERLOADED" if fill_percentage > 100 else "CAPACITY OK"
-
-    fig.update_layout(
-        title=dict(
-            text=f"<b>Trailer Usable Fill: <span style='color:{status_color};'>{fill_percentage:.1f}%</span> ({status_label})</b>",
-            x=0.01,
-            y=0.95,
-            font=dict(size=18),
-        ),
-        scene=dict(
-            xaxis=dict(
-                title='Length (X - 636")',
-                range=[0, TRAILER_LENGTH + 10],
-                autorange=False,
-            ),
-            yaxis=dict(
-                title='Width (Y - 102")',
-                range=[0, TRAILER_WIDTH + 10],
-                autorange=False,
-            ),
-            zaxis=dict(
-                title='Height (Z - 110")',
-                range=[0, TRAILER_HEIGHT + 10],
-                autorange=False,
-            ),
-            aspectmode="manual",
-            aspectratio=dict(
-                x=TRAILER_LENGTH / TRAILER_LENGTH,
-                y=TRAILER_WIDTH / TRAILER_LENGTH,
-                z=TRAILER_HEIGHT / TRAILER_LENGTH,
-            ),
-        ),
-        margin=dict(r=0, l=0, b=0, t=40),
-    )
-    return fig
-
-
 # --- HARDCODED MANIFEST DATA ---
-data = {
+manifest_data = {
     "PartName": [
         "GM1121ACA",
         "GM1122ACA",
@@ -398,18 +228,18 @@ data = {
     ],
 }
 
-df = pd.DataFrame(data)
+df_manifest = pd.DataFrame(manifest_data)
 
-# --- STATE INITIALIZATION ---
+# --- GLOBAL SESSION STATE INITIALIZATION ---
 if "editor_key" not in st.session_state:
     st.session_state.editor_key = 0
 
 if "quantities_df" not in st.session_state:
     st.session_state.quantities_df = pd.DataFrame(
         {
-            "PartName": df["PartName"],
-            "ContainerType": df["ContainerType"],
-            "MaxPartsPerContainer": df["MaxPartsPerContainer"],
+            "PartName": df_manifest["PartName"],
+            "ContainerType": df_manifest["ContainerType"],
+            "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
             "PartQuantity": 0,
         }
     )
@@ -417,8 +247,7 @@ if "quantities_df" not in st.session_state:
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
 
-
-# --- SIDEBAR LOCAL PDF UPLOADER ---
+# --- SIDEBAR & PDF PARSING (MUST RUN BEFORE MAIN BODY WIDGETS) ---
 st.sidebar.header("Invoice Auto-Fill")
 pdf_file = st.sidebar.file_uploader(
     "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
@@ -452,7 +281,7 @@ if pdf_file is not None:
 
                             row_str = " ".join(clean_row).upper()
 
-                            for part_name in df["PartName"]:
+                            for part_name in df_manifest["PartName"]:
                                 base_code = (
                                     part_name.split("-")[0].strip().upper()
                                 )
@@ -495,15 +324,16 @@ if pdf_file is not None:
                                                 break
 
             new_quantities = [
-                extracted_counts.get(p_name, 0) for p_name in df["PartName"]
+                extracted_counts.get(p_name, 0)
+                for p_name in df_manifest["PartName"]
             ]
 
-            # Re-create state dataframe explicitly
+            # Re-create session dataframe directly before UI initialization
             st.session_state.quantities_df = pd.DataFrame(
                 {
-                    "PartName": df["PartName"],
-                    "ContainerType": df["ContainerType"],
-                    "MaxPartsPerContainer": df["MaxPartsPerContainer"],
+                    "PartName": df_manifest["PartName"],
+                    "ContainerType": df_manifest["ContainerType"],
+                    "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
                     "PartQuantity": new_quantities,
                 }
             )
@@ -521,20 +351,192 @@ else:
         st.session_state.editor_key += 1
         st.rerun()
 
-# --- CENTERED QUANTITY ENTRY SECTION ---
+
+# --- PACKING ALGORITHM FUNCTIONS ---
+def pack_truck_realistically(containers_list):
+    packed_items = []
+    unpacked_items = []
+
+    groups = {}
+    for c in containers_list:
+        key = (c["type"], c["length"], c["width"], c["height"])
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(c)
+
+    sorted_group_keys = sorted(
+        groups.keys(), key=lambda k: (k[1], k[2], k[3]), reverse=True
+    )
+
+    current_x = 0.0
+    current_y = 0.0
+    current_row_length = 0.0
+
+    for key in sorted_group_keys:
+        items = groups[key]
+        c_type, l, w, h = key
+
+        max_stack_z = max(1, math.floor(TRAILER_HEIGHT / h))
+        item_index = 0
+        total_group_items = len(items)
+
+        while item_index < total_group_items:
+            if current_y + w > TRAILER_WIDTH:
+                current_x += current_row_length
+                current_y = 0.0
+                current_row_length = 0.0
+
+            if current_x + l > TRAILER_LENGTH:
+                unpacked_items.extend(items[item_index:])
+                break
+
+            stack_count = min(total_group_items - item_index, max_stack_z)
+
+            for z_idx in range(stack_count):
+                curr_item = items[item_index]
+                pos = (current_x, current_y, z_idx * h)
+                packed_items.append({**curr_item, "position": pos})
+                item_index += 1
+
+            current_row_length = max(current_row_length, l)
+            current_y += w
+
+    return packed_items, unpacked_items
+
+
+def calculate_fill_percentage(containers_to_pack):
+    if not containers_to_pack:
+        return 0.0
+
+    total_requested_vol = sum(
+        c["length"] * c["width"] * c["height"] for c in containers_to_pack
+    )
+
+    avg_top_gap = sum(
+        (TRAILER_HEIGHT % c["height"]) for c in containers_to_pack
+    ) / len(containers_to_pack)
+    usable_height_capacity = TRAILER_HEIGHT - avg_top_gap
+    effective_usable_capacity = (
+        TRAILER_LENGTH * TRAILER_WIDTH * usable_height_capacity
+    )
+
+    return (total_requested_vol / effective_usable_capacity) * 100
+
+
+def plot_3d_truck(packed_items, fill_percentage):
+    fig = go.Figure()
+
+    dx, dy, dz = TRAILER_LENGTH, TRAILER_WIDTH, TRAILER_HEIGHT
+    fig.add_trace(
+        go.Scatter3d(
+            x=[0, dx, dx, 0, 0, 0, dx, dx, 0, 0, 0, 0, dx, dx, dx, dx],
+            y=[0, 0, dy, dy, 0, 0, 0, dy, dy, 0, dy, dy, dy, dy, 0, 0],
+            z=[0, 0, 0, 0, 0, dz, dz, dz, dz, dz, dz, 0, 0, dz, dz, 0],
+            mode="lines",
+            line=dict(color="black", width=5),
+            name="Trailer Boundary",
+        )
+    )
+
+    color_map = {}
+    colors = [
+        "royalblue",
+        "crimson",
+        "forestgreen",
+        "darkorange",
+        "purple",
+        "teal",
+        "gold",
+    ]
+
+    for item in packed_items:
+        c_type = item["type"]
+        if c_type not in color_map:
+            color_map[c_type] = colors[len(color_map) % len(colors)]
+
+        x0, y0, z0 = item["position"]
+        d, w, h = item["length"], item["width"], item["height"]
+
+        x = [x0, x0 + d, x0 + d, x0, x0, x0 + d, x0 + d, x0]
+        y = [y0, y0, y0 + w, y0 + w, y0, y0, y0 + w, y0 + w]
+        z = [z0, z0, z0, z0, z0 + h, z0 + h, z0 + h, z0 + h]
+
+        i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
+        j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
+        k = [0, 7, 5, 3, 6, 7, 1, 1, 5, 5, 7, 6]
+
+        fig.add_trace(
+            go.Mesh3d(
+                x=x,
+                y=y,
+                z=z,
+                i=i,
+                j=j,
+                k=k,
+                color=color_map[c_type],
+                opacity=0.75,
+                lighting=dict(ambient=0.8, diffuse=0.8),
+                flatshading=True,
+                name=f"{item['part_name']} ({c_type})",
+                hoverinfo="name",
+            )
+        )
+
+    status_color = "red" if fill_percentage > 100 else "green"
+    status_label = "OVERLOADED" if fill_percentage > 100 else "CAPACITY OK"
+
+    fig.update_layout(
+        title=dict(
+            text=f"<b>Trailer Usable Fill: <span style='color:{status_color};'>{fill_percentage:.1f}%</span> ({status_label})</b>",
+            x=0.01,
+            y=0.95,
+            font=dict(size=18),
+        ),
+        scene=dict(
+            xaxis=dict(
+                title='Length (X - 636")',
+                range=[0, TRAILER_LENGTH + 10],
+                autorange=False,
+            ),
+            yaxis=dict(
+                title='Width (Y - 102")',
+                range=[0, TRAILER_WIDTH + 10],
+                autorange=False,
+            ),
+            zaxis=dict(
+                title='Height (Z - 110")',
+                range=[0, TRAILER_HEIGHT + 10],
+                autorange=False,
+            ),
+            aspectmode="manual",
+            aspectratio=dict(
+                x=TRAILER_LENGTH / TRAILER_LENGTH,
+                y=TRAILER_WIDTH / TRAILER_LENGTH,
+                z=TRAILER_HEIGHT / TRAILER_LENGTH,
+            ),
+        ),
+        margin=dict(r=0, l=0, b=0, t=40),
+    )
+    return fig
+
+
+# --- MAIN QUANTITY ENTRY SECTION ---
 left_pad, center_col, right_pad = st.columns([1, 2, 1])
 
 with center_col:
     st.subheader("1. Enter Order Quantities")
 
-    # Dynamic key forces Streamlit to rebuild widget when data changes from code
+    # Render data editor using current session state directly
     edited_df = st.data_editor(
         st.session_state.quantities_df,
-        key=f"editor_{st.session_state.editor_key}",
+        key=f"editor_widget_{st.session_state.editor_key}",
         num_rows="fixed",
         disabled=["PartName", "ContainerType", "MaxPartsPerContainer"],
         use_container_width=True,
     )
+
+    # Directly save manual edits into session state
+    st.session_state.quantities_df = edited_df
 
     col_calc, col_clear = st.columns([3, 2])
 
@@ -552,13 +554,15 @@ with center_col:
             st.session_state.editor_key += 1
             st.rerun()
 
-# Synchronize edited inputs
-st.session_state.quantities_df["PartQuantity"] = edited_df["PartQuantity"]
-df["PartQuantity"] = edited_df["PartQuantity"]
-
 # --- CALCULATION AND PLOTTING ---
 if calculate_clicked:
-    selected_parts = df[df["PartQuantity"] > 0].copy()
+    # Merge current quantities with full manifest specs
+    working_df = df_manifest.copy()
+    working_df["PartQuantity"] = st.session_state.quantities_df[
+        "PartQuantity"
+    ].values
+
+    selected_parts = working_df[working_df["PartQuantity"] > 0].copy()
 
     if selected_parts.empty:
         st.warning("Please enter a quantity greater than 0 for at least one part.")
