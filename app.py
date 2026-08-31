@@ -281,7 +281,6 @@ if "last_uploaded_pdf" not in st.session_state:
 
 # --- DYNAMIC PDF HANDLING (PARSE OR RESET) ---
 if pdf_file is not None:
-    # If a new PDF is uploaded
     if st.session_state.last_uploaded_pdf != pdf_file.name:
         with st.sidebar.status("Parsing PDF locally...", expanded=True) as status:
             try:
@@ -297,32 +296,28 @@ if pdf_file is not None:
 
                 extracted_counts = {}
 
-                # 2. Parse text lines and correctly extract the QTY column directly before unit price
-                for part_name in df["PartName"]:
-                    base_code = re.escape(part_name.upper())
-                    
-                    # Regex searches for the part code and grabs the integer directly preceding the price decimal
-                    pattern = rf"{base_code}.*?(\d+)\s+\d+\.\d{{\d+}}"
-                    matches = re.findall(pattern, extracted_text, re.DOTALL | re.IGNORECASE)
-                    
-                    if matches:
-                        total_qty = sum(int(m) for m in matches)
-                        extracted_counts[part_name[:9].upper()] = total_qty
-                    else:
-                        # Fallback for structured line-by-line tabular parsing
-                        for line in extracted_text.splitlines():
-                            if part_name.upper() in line.upper():
-                                nums = re.findall(r"\b\d+\b", line)
+                # 2. Parse text lines and extract quantity counts per part code
+                for line in extracted_text.splitlines():
+                    clean_line = " ".join(line.split())
+
+                    for part_name in df["PartName"]:
+                        base_code = part_name.split("-")[0].strip().upper()
+
+                        if base_code in clean_line.upper():
+                            match = re.search(
+                                r"\b(\d+)\s+\d+\.\d{2,4}\b", clean_line
+                            )
+                            if match:
+                                qty = int(match.group(1))
+                                extracted_counts[part_name] = qty
+                            else:
+                                nums = re.findall(r"\b\d+\b", clean_line)
                                 if len(nums) >= 2:
-                                    for candidate in reversed(nums):
-                                        val = int(candidate)
-                                        if val > 0 and val != 1931951: # Exclude PO number strings
-                                            extracted_counts[part_name[:9].upper()] = val
-                                            break
+                                    extracted_counts[part_name] = int(nums[-2])
 
                 # 3. Map extracted quantities to DataFrame order
                 new_quantities = [
-                    extracted_counts.get(p_name[:9].upper(), 0)
+                    extracted_counts.get(p_name, 0)
                     for p_name in df["PartName"]
                 ]
 
@@ -343,7 +338,6 @@ if pdf_file is not None:
                 status.update(label="PDF Parsing Error", state="error", expanded=False)
                 st.sidebar.error(f"Failed to read PDF: {e}")
 else:
-    # If the file was removed/deleted using the 'x' button
     if st.session_state.last_uploaded_pdf is not None:
         st.session_state.quantities_df["PartQuantity"] = 0
         st.session_state.last_uploaded_pdf = None
@@ -356,7 +350,6 @@ left_pad, center_col, right_pad = st.columns([1, 2, 1])
 with center_col:
     st.subheader("1. Enter Order Quantities")
 
-    # Displays PartName, ContainerType, MaxPartsPerContainer, and editable PartQuantity
     edited_df = st.data_editor(
         st.session_state.quantities_df,
         key=f"data_editor_{st.session_state.editor_key}",
@@ -421,7 +414,6 @@ if calculate_clicked or pdf_triggered_calc:
         for i in range(num_containers):
             parts_in_this_box = min(remaining_parts, max_per_container)
 
-            # Weight = (Parts Qty * Single Part Weight) + Empty Container Weight
             box_gross_weight = container_empty_weight + (
                 parts_in_this_box * part_unit_weight
             )
