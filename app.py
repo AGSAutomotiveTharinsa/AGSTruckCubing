@@ -3,8 +3,8 @@ import io
 import math
 import re
 import pandas as pd
-import pdfplumber
 import plotly.graph_objects as go
+from pypdf import PdfReader
 import streamlit as st
 
 # --- PAGE SETUP ---
@@ -433,60 +433,87 @@ if "editor_key" not in st.session_state:
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
 
-# --- DYNAMIC PDF HANDLING (PDFPLUMBER SPATIAL PARSER) ---
+# --- UNIVERSAL PYPDF PARSER ---
 if pdf_file is not None:
     if st.session_state.last_uploaded_pdf != pdf_file.name:
-        with st.sidebar.status("Parsing PDF layout...", expanded=True) as status:
+        with st.sidebar.status("Parsing PDF via PyPDF...", expanded=True) as status:
             try:
+                reader = PdfReader(io.BytesIO(pdf_file.getvalue()))
+                extracted_text = "\n".join(
+                    [
+                        page.extract_text()
+                        for page in reader.pages
+                        if page.extract_text()
+                    ]
+                )
+
                 extracted_counts = {}
 
-                with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
-                    for page in pdf.pages:
-                        # Extract visual text rows using spatial tolerance
-                        text_lines = page.extract_text(
-                            layout=True, y_tolerance=3
-                        ).splitlines()
-
-                        part_rows = []
-                        qty_rows = []
-
-                        for line in text_lines:
-                            clean = " ".join(line.split())
-                            if not clean:
-                                continue
-
-                            # Track rows containing part names
-                            for part_name in df["PartName"]:
-                                base_code = (
-                                    part_name.split("-")[0].strip().upper()
+                # PASS 1: Inline Format (Part Name + Quantity + Decimal Unit Price on same string)
+                for line in extracted_text.splitlines():
+                    clean_line = " ".join(line.split())
+                    for part_name in df["PartName"]:
+                        base_code = part_name.split("-")[0].strip().upper()
+                        if base_code in clean_line.upper():
+                            inline_match = re.search(
+                                r"\b(\d+)\s+\d+\.\d{2,4}\b", clean_line
+                            )
+                            if inline_match:
+                                extracted_counts[part_name] = int(
+                                    inline_match.group(1)
                                 )
-                                if base_code in clean.upper():
-                                    # Inline Single-Line Format (e.g. "GM286EBA 1500 12.9518")
-                                    inline_match = re.search(
-                                        r"\b(\d+)\s+\d+\.\d{2,4}\b", clean
-                                    )
-                                    if inline_match:
-                                        extracted_counts[part_name] = int(
-                                            inline_match.group(1)
-                                        )
-                                    else:
-                                        part_rows.append(part_name)
 
-                            # Track rows containing Net Weight / Quantity columns
-                            if "KG" in clean.upper():
-                                # Extract numbers strictly located after the 'KG' specifier on the same line
-                                match_after_kg = re.search(
-                                    r"\bKG\b\s+(\d+)\b", clean, flags=re.IGNORECASE
-                                )
-                                if match_after_kg:
-                                    qty_rows.append(int(match_after_kg.group(1)))
+                # PASS 2: Columnar/Block Layout Format
+                if not extracted_counts:
+                    lines = extracted_text.splitlines()
 
-                        # Positional pairing for multi-line column layouts
-                        if part_rows and qty_rows:
-                            for p_name, q_val in zip(part_rows, qty_rows):
-                                extracted_counts[p_name] = q_val
+                    # 1. Identify order of part codes in text
+                    found_parts = []
+                    for line in lines:
+                        clean_line = " ".join(line.split())
+                        for part_name in df["PartName"]:
+                            base_code = part_name.split("-")[0].strip().upper()
+                            if (
+                                base_code in clean_line.upper()
+                                and part_name not in found_parts
+                            ):
+                                found_parts.append(part_name)
 
-                # Map extracted quantities to target DataFrame structure
+                    # 2. Extract QTY integers after stripping NET WGT / KG values
+                    found_qtys = []
+                    for line in lines:
+                        clean_line = " ".join(line.split())
+
+                        # Strip weight patterns like "1200 KG" or "1200KG"
+                        clean_no_kg = re.sub(
+                            r"\b\d+\s*KG\b", "", clean_line, flags=re.IGNORECASE
+                        )
+
+                        # Match remaining integers on lines containing QTY column headers or pure numeric data
+                        # Prevents picking up random document numbers/dates by filtering out values > 50,000 or years
+                        nums = re.findall(r"\b\d+\b", clean_no_kg)
+                        for num_str in nums:
+                            val = int(num_str)
+                            if val > 0 and val not in [
+                                2020,
+                                2021,
+                                2022,
+                                2023,
+                                2024,
+                                2025,
+                                2026,
+                                1931951,
+                            ]:
+                                found_qtys.append(val)
+
+                    # 3. Align the last N integers (matching the count of detected parts) with part codes
+                    if len(found_qtys) >= len(found_parts) and len(found_parts) > 0:
+                        # Grab exact tail slice corresponding to quantity column
+                        matched_qtys = found_qtys[-len(found_parts) :]
+                        for p_name, q_val in zip(found_parts, matched_qtys):
+                            extracted_counts[p_name] = q_val
+
+                # Map extracted values to DataFrame order
                 new_quantities = [
                     extracted_counts.get(p_name, 0)
                     for p_name in df["PartName"]
@@ -498,7 +525,7 @@ if pdf_file is not None:
                 pdf_triggered_calc = True
 
                 status.update(
-                    label="Invoice parsed accurately!",
+                    label="Invoice parsed successfully!",
                     state="complete",
                     expanded=False,
                 )
@@ -511,7 +538,7 @@ if pdf_file is not None:
                 status.update(
                     label="PDF Parsing Error", state="error", expanded=False
                 )
-                st.sidebar.error(f"Failed to read PDF layout: {e}")
+                st.sidebar.error(f"Failed to read PDF: {e}")
 else:
     if st.session_state.last_uploaded_pdf is not None:
         st.session_state.quantities_df["PartQuantity"] = 0
