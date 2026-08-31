@@ -284,7 +284,6 @@ if pdf_file is not None:
     if st.session_state.last_uploaded_pdf != pdf_file.name:
         with st.sidebar.status("Parsing PDF locally...", expanded=True) as status:
             try:
-                # 1. Read PDF text directly from uploaded file buffer
                 pdf_reader = PdfReader(io.BytesIO(pdf_file.getvalue()))
                 extracted_text = "\n".join(
                     [
@@ -296,26 +295,51 @@ if pdf_file is not None:
 
                 extracted_counts = {}
 
-                # 2. Parse text lines and extract quantity counts per part code
+                # 1. First Pass: Single-line row parsing (Inline QTY before price)
                 for line in extracted_text.splitlines():
                     clean_line = " ".join(line.split())
-
                     for part_name in df["PartName"]:
                         base_code = part_name.split("-")[0].strip().upper()
-
                         if base_code in clean_line.upper():
-                            match = re.search(
-                                r"\b(\d+)\s+\d+\.\d{2,4}\b", clean_line
-                            )
+                            # Pattern matches integer directly preceding a price decimal (e.g. "800 5.7916")
+                            match = re.search(r"\b(\d+)\s+\d+\.\d{2,4}\b", clean_line)
                             if match:
-                                qty = int(match.group(1))
-                                extracted_counts[part_name] = qty
-                            else:
-                                nums = re.findall(r"\b\d+\b", clean_line)
-                                if len(nums) >= 2:
-                                    extracted_counts[part_name] = int(nums[-2])
+                                extracted_counts[part_name] = int(match.group(1))
 
-                # 3. Map extracted quantities to DataFrame order
+                # 2. Second Pass: Columnar layout parsing (Part codes listed in block, QTYs listed in separate column)
+                if not extracted_counts:
+                    # Identify ordered list of part codes present in text
+                    found_parts = []
+                    for line in extracted_text.splitlines():
+                        clean_line = " ".join(line.split())
+                        for part_name in df["PartName"]:
+                            base_code = part_name.split("-")[0].strip().upper()
+                            if base_code in clean_line.upper() and part_name not in found_parts:
+                                found_parts.append(part_name)
+
+                    # Filter out weights ending in KG and pick pure QTY integers
+                    valid_qtys = []
+                    for line in extracted_text.splitlines():
+                        clean_line = " ".join(line.split())
+                        # Skip net weight lines containing "KG"
+                        if "KG" in clean_line.upper():
+                            # Remove the weight values (e.g., "1200 KG") before searching for QTY
+                            clean_line = re.sub(r"\b\d+\s*KG\b", "", clean_line, flags=re.IGNORECASE)
+                        
+                        # Find remaining standalone integers
+                        nums = re.findall(r"\b\d+\b", clean_line)
+                        for num in nums:
+                            val = int(num)
+                            # Exclude year/date fragments or static ID strings
+                            if val > 0 and val not in [2020, 2021, 2022, 2023, 2024, 2025, 2026, 1931951]:
+                                valid_qtys.append(val)
+
+                    # Positionally pair discovered parts with discovered quantities
+                    for idx, part_name in enumerate(found_parts):
+                        if idx < len(valid_qtys):
+                            extracted_counts[part_name] = valid_qtys[idx]
+
+                # Map extracted quantities to DataFrame order
                 new_quantities = [
                     extracted_counts.get(p_name, 0)
                     for p_name in df["PartName"]
