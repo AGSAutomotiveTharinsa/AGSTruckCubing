@@ -247,80 +247,84 @@ if "quantities_df" not in st.session_state:
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
     
-# --- SIDEBAR & PDF PARSING (REPLACEMENT BLOCK) ---
+# --- SIDEBAR & PDF PARSING (STATE-FIXED BLOCK) ---
 st.sidebar.header("Invoice Auto-Fill")
-pdf_file = st.sidebar.file_uploader("To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"])
+pdf_file = st.sidebar.file_uploader(
+    "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
+)
 
-if pdf_file is not None:
-    if st.session_state.last_uploaded_pdf != pdf_file.name:
-        extracted_counts = {}
-        debug_log = []
-        
-        try:
-            with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
-                for page_num, page in enumerate(pdf.pages):
-                    # 1. Extract raw text as fallback for borderless tables
-                    raw_text = page.extract_text() or ""
-                    
-                    # 2. Extract structured tables if present
-                    tables = page.extract_tables() or []
-                    
-                    # Process every line in raw text
-                    for line in raw_text.split("\n"):
-                        clean_line = line.upper().strip()
-                        
-                        for part_name in df_manifest["PartName"]:
-                            # Extract base part string (e.g., "GM1121ACA" from "GM1121ACA")
-                            base_code = part_name.split("-")[0].strip().upper()
-                            
-                            if base_code in clean_line:
-                                # Look for numbers in the line that represent quantities
-                                numbers = re.findall(r'\b\d+\b', clean_line)
-                                # Filter out common part-number fragments, dates, or years
-                                valid_qtys = [
-                                    int(n) for n in numbers 
-                                    if int(n) not in [2024, 2025, 2026, 2027] and 0 < int(n) < 50000
-                                ]
-                                
-                                if valid_qtys:
-                                    # Pick the quantity candidate (usually the largest or last integer on the line)
-                                    qty = valid_qtys[-1]
-                                    extracted_counts[part_name] = qty
-                                    debug_log.append(f"Found {part_name}: {qty}")
-
-            # Fallback check if nothing matched
-            if not extracted_counts:
-                st.sidebar.warning("⚠️ PDF read, but no matching Part Numbers were found. Check debug text below.")
-                with st.sidebar.expander("View Raw PDF Text Preview"):
-                    with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
-                        st.text((pdf.pages[0].extract_text() or "No readable text found")[:1000])
-            else:
-                st.sidebar.success(f"Matched {len(extracted_counts)} parts!")
-                with st.sidebar.expander("Extracted Details"):
-                    for log in debug_log:
-                        st.write(log)
-
-            # Map extracted quantities back to main array
-            new_quantities = [
-                extracted_counts.get(p_name, 0) for p_name in df_manifest["PartName"]
-            ]
-
-            # Force state update and widget key increment
-            st.session_state.quantities_df["PartQuantity"] = new_quantities
-            st.session_state.last_uploaded_pdf = pdf_file.name
-            st.session_state.editor_key += 1
-            st.rerun()
-
-        except Exception as e:
-            st.sidebar.error(f"Failed to read PDF: {e}")
-
-else:
+# 1. Reset state if the user removes the file
+if pdf_file is None:
     if st.session_state.last_uploaded_pdf is not None:
         st.session_state.quantities_df["PartQuantity"] = 0
         st.session_state.last_uploaded_pdf = None
         st.session_state.editor_key += 1
         st.rerun()
 
+# 2. Process PDF only when a NEW file is uploaded
+elif st.session_state.last_uploaded_pdf != pdf_file.name:
+    extracted_counts = {}
+    debug_log = []
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
+            for page in pdf.pages:
+                raw_text = page.extract_text() or ""
+                for line in raw_text.split("\n"):
+                    clean_line = line.upper().strip()
+
+                    for part_name in df_manifest["PartName"]:
+                        base_code = part_name.split("-")[0].strip().upper()
+
+                        if base_code in clean_line:
+                            # Grab digits from the line
+                            numbers = re.findall(r"\b\d+\b", clean_line)
+                            valid_qtys = [
+                                int(n)
+                                for n in numbers
+                                if int(n) not in [2024, 2025, 2026, 2027]
+                                and 0 < int(n) < 50000
+                            ]
+                            if valid_qtys:
+                                qty = valid_qtys[-1]
+                                extracted_counts[part_name] = qty
+                                debug_log.append(f"{part_name}: {qty}")
+
+        # Update dataframe values in state
+        new_quantities = [
+            extracted_counts.get(p_name, 0) for p_name in df_manifest["PartName"]
+        ]
+        st.session_state.quantities_df["PartQuantity"] = new_quantities
+
+        # Lock the uploaded file name so it doesn't re-trigger
+        st.session_state.last_uploaded_pdf = pdf_file.name
+        st.session_state.editor_key += 1
+
+        # Force a single refresh to push new quantities into st.data_editor
+        st.rerun()
+
+    except Exception as e:
+        st.sidebar.error(f"Failed to read PDF: {e}")
+
+# 3. Sidebar feedback display (persists across reruns)
+if pdf_file is not None and st.session_state.last_uploaded_pdf == pdf_file.name:
+    total_found = (st.session_state.quantities_df["PartQuantity"] > 0).sum()
+    if total_found > 0:
+        st.sidebar.success(f"✅ Successfully matched {total_found} part items!")
+    else:
+        st.sidebar.warning(
+            "⚠️ No matching Part Numbers found. Expand below to see PDF text."
+        )
+        with st.sidebar.expander("View PDF Raw Text"):
+            try:
+                with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
+                    st.text(
+                        (pdf.pages[0].extract_text() or "No readable text found")[
+                            :1000
+                        ]
+                    )
+            except Exception:
+                st.write("Could not render text preview.")
 
 # --- PACKING ALGORITHM FUNCTIONS ---
 def pack_truck_realistically(containers_list):
