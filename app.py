@@ -3,8 +3,8 @@ import io
 import math
 import re
 import pandas as pd
+import pdfplumber
 import plotly.graph_objects as go
-from pypdf import PdfReader
 import streamlit as st
 
 # --- PAGE SETUP ---
@@ -197,68 +197,222 @@ def plot_3d_truck(packed_items, fill_percentage):
 # --- HARDCODED MANIFEST DATA ---
 data = {
     "PartName": [
-        "GM1121ACA", "GM1122ACA", "GM286YBA", "GM286EBA", "GM286FBA",
-        "GM1100CBA", "GM1100DBA", "GM1110CCA", "GM1110DCA", "FC1100JAA-STMP",
-        "FC1226CBA-WELD", "FC1226DBA-WELD", "FC1227ECA-WELD", "FC1227FCA-WELD",
-        "GM1123ABB", "GM1124ABB", "GM1130ECA", "GM1130FCA", "CV2440FAA",
-        "CV2440GAA", "GM2430UAA", "GM2430IAA", "GM2200EAA", "GM2200FAA"
+        "GM1121ACA",
+        "GM1122ACA",
+        "GM286YBA",
+        "GM286EBA",
+        "GM286FBA",
+        "GM1100CBA",
+        "GM1100DBA",
+        "GM1110CCA",
+        "GM1110DCA",
+        "FC1100JAA-STMP",
+        "FC1226CBA-WELD",
+        "FC1226DBA-WELD",
+        "FC1227ECA-WELD",
+        "FC1227FCA-WELD",
+        "GM1123ABB",
+        "GM1124ABB",
+        "GM1130ECA",
+        "GM1130FCA",
+        "CV2440FAA",
+        "CV2440GAA",
+        "GM2430UAA",
+        "GM2430IAA",
+        "GM2200EAA",
+        "GM2200FAA",
     ],
     "ContainerType": [
-        "*PLA405", "*PLA405", "*GM5131", "*CC3A", "*CC3A",
-        "*AGS1091", "*AGS1091", "*AGS1091", "*AGS1091", "*AGS1010",
-        "*AGS1010", "*AGS1010", "*AGS1010", "*AGS1010", "*PLA405",
-        "*PLA405", "AGS1015", "AGS1015", "AGS1015", "AGS1015",
-        "AGS1015", "AGS1015", "AGS1015", "AGS1015"
+        "*PLA405",
+        "*PLA405",
+        "*GM5131",
+        "*CC3A",
+        "*CC3A",
+        "*AGS1091",
+        "*AGS1091",
+        "*AGS1091",
+        "*AGS1091",
+        "*AGS1010",
+        "*AGS1010",
+        "*AGS1010",
+        "*AGS1010",
+        "*AGS1010",
+        "*PLA405",
+        "*PLA405",
+        "AGS1015",
+        "AGS1015",
+        "AGS1015",
+        "AGS1015",
+        "AGS1015",
+        "AGS1015",
+        "AGS1015",
+        "AGS1015",
     ],
     "ContainerLength [in]": [
-        48, 48, 54, 53, 53,
-        62, 62, 62, 62, 48,
-        48, 48, 48, 48, 48,
-        48, 48, 48, 48, 48,
-        48, 48, 48, 48
+        48,
+        48,
+        54,
+        53,
+        53,
+        62,
+        62,
+        62,
+        62,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
+        48,
     ],
     "ContainerWidth": [
-        45, 45, 44, 42, 42,
-        48, 48, 48, 48, 45,
-        45, 45, 45, 45, 45,
-        45, 45, 45, 45, 45,
-        45, 45, 45, 45
+        45,
+        45,
+        44,
+        42,
+        42,
+        48,
+        48,
+        48,
+        48,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
     ],
     "ContainerHeight": [
-        53, 53, 40, 38, 38,
-        50, 50, 50, 50, 34,
-        34, 34, 34, 34, 53,
-        53, 25, 25, 25, 25,
-        25, 25, 25, 25
+        53,
+        53,
+        40,
+        38,
+        38,
+        50,
+        50,
+        50,
+        50,
+        34,
+        34,
+        34,
+        34,
+        34,
+        53,
+        53,
+        25,
+        25,
+        25,
+        25,
+        25,
+        25,
+        25,
+        25,
     ],
     "ContainerWeight [kg]": [
-        79.1, 79.1, 170.0, 173.0, 173.0,
-        256.8, 256.8, 256.8, 256.8, 181.8,
-        181.8, 181.8, 181.8, 181.8, 79.1,
-        79.1, 170.5, 170.5, 170.5, 170.5,
-        170.5, 170.5, 170.5, 170.5
+        79.1,
+        79.1,
+        170.0,
+        173.0,
+        173.0,
+        256.8,
+        256.8,
+        256.8,
+        256.8,
+        181.8,
+        181.8,
+        181.8,
+        181.8,
+        181.8,
+        79.1,
+        79.1,
+        170.5,
+        170.5,
+        170.5,
+        170.5,
+        170.5,
+        170.5,
+        170.5,
+        170.5,
     ],
     "MaxPartsPerContainer": [
-        192, 192, 350, 300, 300,
-        112, 112, 112, 112, 798,
-        48, 48, 450, 450, 144,
-        144, 800, 1000, 2000, 2000,
-        200, 200, 1008, 1008
+        192,
+        192,
+        350,
+        300,
+        300,
+        112,
+        112,
+        112,
+        112,
+        798,
+        48,
+        48,
+        450,
+        450,
+        144,
+        144,
+        800,
+        1000,
+        2000,
+        2000,
+        200,
+        200,
+        1008,
+        1008,
     ],
     "Weight of 1 Part [kg]": [
-        0.68, 0.68, 0.92, 0.82, 0.82,
-        2.05, 2.05, 2.05, 2.05, 1.34,
-        3.98, 3.96, 1.96, 1.96, 0.68,
-        0.68, 0.27, 0.25, 0.23, 0.23,
-        0.23, 0.23, 0.40, 0.40
-    ]
+        0.68,
+        0.68,
+        0.92,
+        0.82,
+        0.82,
+        2.05,
+        2.05,
+        2.05,
+        2.05,
+        1.34,
+        3.98,
+        3.96,
+        1.96,
+        1.96,
+        0.68,
+        0.68,
+        0.27,
+        0.25,
+        0.23,
+        0.23,
+        0.23,
+        0.23,
+        0.40,
+        0.40,
+    ],
 }
 
 df = pd.DataFrame(data)
 
 # --- SIDEBAR LOCAL PDF UPLOADER ---
 st.sidebar.header("Invoice Auto-Fill")
-pdf_file = st.sidebar.file_uploader("To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"])
+pdf_file = st.sidebar.file_uploader(
+    "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
+)
 
 pdf_triggered_calc = False
 
@@ -279,67 +433,60 @@ if "editor_key" not in st.session_state:
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
 
-# --- DYNAMIC PDF HANDLING (PARSE OR RESET) ---
+# --- DYNAMIC PDF HANDLING (PDFPLUMBER SPATIAL PARSER) ---
 if pdf_file is not None:
     if st.session_state.last_uploaded_pdf != pdf_file.name:
-        with st.sidebar.status("Parsing PDF locally...", expanded=True) as status:
+        with st.sidebar.status("Parsing PDF layout...", expanded=True) as status:
             try:
-                pdf_reader = PdfReader(io.BytesIO(pdf_file.getvalue()))
-                extracted_text = "\n".join(
-                    [
-                        page.extract_text()
-                        for page in pdf_reader.pages
-                        if page.extract_text()
-                    ]
-                )
-
                 extracted_counts = {}
 
-                # 1. First Pass: Single-line row parsing (Inline QTY before price)
-                for line in extracted_text.splitlines():
-                    clean_line = " ".join(line.split())
-                    for part_name in df["PartName"]:
-                        base_code = part_name.split("-")[0].strip().upper()
-                        if base_code in clean_line.upper():
-                            # Pattern matches integer directly preceding a price decimal (e.g. "800 5.7916")
-                            match = re.search(r"\b(\d+)\s+\d+\.\d{2,4}\b", clean_line)
-                            if match:
-                                extracted_counts[part_name] = int(match.group(1))
+                with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
+                    for page in pdf.pages:
+                        # Extract visual text rows using spatial tolerance
+                        text_lines = page.extract_text(
+                            layout=True, y_tolerance=3
+                        ).splitlines()
 
-                # 2. Second Pass: Columnar layout parsing (Part codes listed in block, QTYs listed in separate column)
-                if not extracted_counts:
-                    # Identify ordered list of part codes present in text
-                    found_parts = []
-                    for line in extracted_text.splitlines():
-                        clean_line = " ".join(line.split())
-                        for part_name in df["PartName"]:
-                            base_code = part_name.split("-")[0].strip().upper()
-                            if base_code in clean_line.upper() and part_name not in found_parts:
-                                found_parts.append(part_name)
+                        part_rows = []
+                        qty_rows = []
 
-                    # Filter out weights ending in KG and pick pure QTY integers
-                    valid_qtys = []
-                    for line in extracted_text.splitlines():
-                        clean_line = " ".join(line.split())
-                        # Skip net weight lines containing "KG"
-                        if "KG" in clean_line.upper():
-                            # Remove the weight values (e.g., "1200 KG") before searching for QTY
-                            clean_line = re.sub(r"\b\d+\s*KG\b", "", clean_line, flags=re.IGNORECASE)
-                        
-                        # Find remaining standalone integers
-                        nums = re.findall(r"\b\d+\b", clean_line)
-                        for num in nums:
-                            val = int(num)
-                            # Exclude year/date fragments or static ID strings
-                            if val > 0 and val not in [2020, 2021, 2022, 2023, 2024, 2025, 2026, 1931951]:
-                                valid_qtys.append(val)
+                        for line in text_lines:
+                            clean = " ".join(line.split())
+                            if not clean:
+                                continue
 
-                    # Positionally pair discovered parts with discovered quantities
-                    for idx, part_name in enumerate(found_parts):
-                        if idx < len(valid_qtys):
-                            extracted_counts[part_name] = valid_qtys[idx]
+                            # Track rows containing part names
+                            for part_name in df["PartName"]:
+                                base_code = (
+                                    part_name.split("-")[0].strip().upper()
+                                )
+                                if base_code in clean.upper():
+                                    # Inline Single-Line Format (e.g. "GM286EBA 1500 12.9518")
+                                    inline_match = re.search(
+                                        r"\b(\d+)\s+\d+\.\d{2,4}\b", clean
+                                    )
+                                    if inline_match:
+                                        extracted_counts[part_name] = int(
+                                            inline_match.group(1)
+                                        )
+                                    else:
+                                        part_rows.append(part_name)
 
-                # Map extracted quantities to DataFrame order
+                            # Track rows containing Net Weight / Quantity columns
+                            if "KG" in clean.upper():
+                                # Extract numbers strictly located after the 'KG' specifier on the same line
+                                match_after_kg = re.search(
+                                    r"\bKG\b\s+(\d+)\b", clean, flags=re.IGNORECASE
+                                )
+                                if match_after_kg:
+                                    qty_rows.append(int(match_after_kg.group(1)))
+
+                        # Positional pairing for multi-line column layouts
+                        if part_rows and qty_rows:
+                            for p_name, q_val in zip(part_rows, qty_rows):
+                                extracted_counts[p_name] = q_val
+
+                # Map extracted quantities to target DataFrame structure
                 new_quantities = [
                     extracted_counts.get(p_name, 0)
                     for p_name in df["PartName"]
@@ -351,16 +498,20 @@ if pdf_file is not None:
                 pdf_triggered_calc = True
 
                 status.update(
-                    label="Invoice parsed instantly!",
+                    label="Invoice parsed accurately!",
                     state="complete",
                     expanded=False,
                 )
-                st.sidebar.success(f"Extracted {sum(new_quantities)} total parts!")
+                st.sidebar.success(
+                    f"Extracted {sum(new_quantities)} total parts!"
+                )
                 st.rerun()
 
             except Exception as e:
-                status.update(label="PDF Parsing Error", state="error", expanded=False)
-                st.sidebar.error(f"Failed to read PDF: {e}")
+                status.update(
+                    label="PDF Parsing Error", state="error", expanded=False
+                )
+                st.sidebar.error(f"Failed to read PDF layout: {e}")
 else:
     if st.session_state.last_uploaded_pdf is not None:
         st.session_state.quantities_df["PartQuantity"] = 0
@@ -408,7 +559,9 @@ if calculate_clicked or pdf_triggered_calc:
     selected_parts = df[df["PartQuantity"] > 0].copy()
 
     if selected_parts.empty:
-        st.warning("Please enter a quantity greater than 0 for at least one part.")
+        st.warning(
+            "Please enter a quantity greater than 0 for at least one part."
+        )
         st.stop()
 
     containers_to_pack = []
