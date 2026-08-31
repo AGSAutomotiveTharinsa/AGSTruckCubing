@@ -247,7 +247,7 @@ if "quantities_df" not in st.session_state:
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
     
-# --- SIDEBAR & PDF PARSING (MULTI-PAGE & UNLIMITED TEXT BLOCK) ---
+# --- SIDEBAR & PDF PARSING (NORMALIZED TEXT PARSER) ---
 st.sidebar.header("Invoice Auto-Fill")
 pdf_file = st.sidebar.file_uploader(
     "To auto-fill part QTYs, upload AGS Invoice (PDF)", type=["pdf"]
@@ -266,32 +266,50 @@ elif st.session_state.last_uploaded_pdf != pdf_file.name:
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
-            # Iterate through ALL pages in the PDF document
             for page_idx, page in enumerate(pdf.pages):
                 raw_text = page.extract_text() or ""
 
-                for line in raw_text.split("\n"):
-                    clean_line = line.upper().strip()
+                # 1. Join all text lines on the page into a single continuous block
+                #    and strip out extra spacing between characters
+                lines = raw_text.split("\n")
+                full_text_clean = " ".join([l.strip() for l in lines]).upper()
 
-                    for part_name in df_manifest["PartName"]:
-                        base_code = part_name.split("-")[0].strip().upper()
+                # 2. Search for each part using a flexible regex pattern
+                for part_name in df_manifest["PartName"]:
+                    base_code = part_name.split("-")[0].strip().upper()
 
-                        if base_code in clean_line:
-                            # Extract integer strings
-                            numbers = re.findall(r"\b\d+\b", clean_line)
-                            valid_qtys = [
-                                int(n)
-                                for n in numbers
-                                if int(n) not in [2024, 2025, 2026, 2027]
-                                and 0 < int(n) < 50000
-                            ]
-                            if valid_qtys:
-                                qty = valid_qtys[-1]
-                                extracted_counts[part_name] = qty
-                                debug_log.append(
-                                    f"P{page_idx+1} -> {part_name}: {qty}"
-                                )
+                    # Match part code followed by line text up to KG weight and QTY
+                    # Example pattern target: "FC1100JAA-STMP...KG 800"
+                    pattern = (
+                        re.escape(base_code) + r".*?KG\s*(\d{1,6})\b"
+                    )
+                    match = re.search(pattern, full_text_clean)
 
+                    if match:
+                        qty = int(match.group(1))
+                        extracted_counts[part_name] = qty
+                        debug_log.append(f"{part_name} -> {qty}")
+                    else:
+                        # Fallback for lines without explicit 'KG' anchor
+                        fallback_pattern = (
+                            re.escape(base_code) + r".*?\b(\d{2,5})\b"
+                        )
+                        fallback_match = re.search(
+                            fallback_pattern, full_text_clean
+                        )
+                        if fallback_match:
+                            val = int(fallback_match.group(1))
+                            if val not in [
+                                2024,
+                                2025,
+                                2026,
+                                2027,
+                                8708,
+                            ]:  # Exclude years and HTS codes
+                                extracted_counts[part_name] = val
+                                debug_log.append(f"{part_name} (fallback) -> {val}")
+
+        # Update dataframe values in state
         new_quantities = [
             extracted_counts.get(p_name, 0) for p_name in df_manifest["PartName"]
         ]
@@ -303,21 +321,16 @@ elif st.session_state.last_uploaded_pdf != pdf_file.name:
     except Exception as e:
         st.sidebar.error(f"Failed to read PDF: {e}")
 
-# Persistent Feedback & Complete Text Viewer
+# Sidebar UI feedback display
 if pdf_file is not None and st.session_state.last_uploaded_pdf == pdf_file.name:
     total_found = (st.session_state.quantities_df["PartQuantity"] > 0).sum()
     if total_found > 0:
-        st.sidebar.success(f"✅ Matched {total_found} part items!")
+        st.sidebar.success(f"✅ Extracted quantities for {total_found} parts!")
     else:
-        st.sidebar.warning("⚠️ No matching Part Numbers found.")
-        with st.sidebar.expander("View Complete PDF Text"):
-            try:
-                with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
-                    for i, page in enumerate(pdf.pages):
-                        st.markdown(f"**--- Page {i+1} ---**")
-                        st.text(page.extract_text() or "Empty page")
-            except Exception:
-                st.write("Could not render text preview.")
+        st.sidebar.warning("⚠️ Could not match quantities to part codes.")
+
+
+
 
 # --- PACKING ALGORITHM FUNCTIONS ---
 def pack_truck_realistically(containers_list):
