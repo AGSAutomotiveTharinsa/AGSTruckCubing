@@ -433,90 +433,82 @@ if "editor_key" not in st.session_state:
 if "last_uploaded_pdf" not in st.session_state:
     st.session_state.last_uploaded_pdf = None
 
-# --- UNIVERSAL PYPDF PARSER ---
+# --- ROBUST PYPDF SPATIAL PARSER ---
 if pdf_file is not None:
     if st.session_state.last_uploaded_pdf != pdf_file.name:
         with st.sidebar.status("Parsing PDF via PyPDF...", expanded=True) as status:
             try:
                 reader = PdfReader(io.BytesIO(pdf_file.getvalue()))
-                extracted_text = "\n".join(
-                    [
-                        page.extract_text()
-                        for page in reader.pages
-                        if page.extract_text()
-                    ]
-                )
-
                 extracted_counts = {}
 
-                # PASS 1: Inline Format (Part Name + Quantity + Decimal Unit Price on same string)
-                for line in extracted_text.splitlines():
-                    clean_line = " ".join(line.split())
-                    for part_name in df["PartName"]:
-                        base_code = part_name.split("-")[0].strip().upper()
-                        if base_code in clean_line.upper():
-                            inline_match = re.search(
-                                r"\b(\d+)\s+\d+\.\d{2,4}\b", clean_line
-                            )
-                            if inline_match:
-                                extracted_counts[part_name] = int(
-                                    inline_match.group(1)
-                                )
+                # Loop through pages and extract formatted visual layout text
+                for page in reader.pages:
+                    # Extract layout mode preserves spatial spacing and columns
+                    layout_text = page.extract_text(layout="layout")
+                    if not layout_text:
+                        layout_text = page.extract_text()
+                    if not layout_text:
+                        continue
 
-                # PASS 2: Columnar/Block Layout Format
-                if not extracted_counts:
-                    lines = extracted_text.splitlines()
+                    lines = layout_text.splitlines()
 
-                    # 1. Identify order of part codes in text
-                    found_parts = []
                     for line in lines:
+                        # Clean multiple spaces down to single spaces for pattern matching
+                        clean_line = " ".join(line.split())
+                        if not clean_line:
+                            continue
+
+                        # Check for matching Part Name
+                        for part_name in df["PartName"]:
+                            base_code = part_name.split("-")[0].strip().upper()
+
+                            if base_code in clean_line.upper():
+                                # 1. Try inline row pattern: PART_NO ... [KG/WGT] ... QTY
+                                # Captures the trailing numeric token on the same visual line
+                                tokens = clean_line.split()
+                                numeric_tokens = []
+                                for tok in tokens:
+                                    # Strip commas or symbols from numbers
+                                    clean_tok = re.sub(r"[^\d]", "", tok)
+                                    if clean_tok.isdigit():
+                                        val = int(clean_tok)
+                                        # Exclude years or header codes
+                                        if val > 0 and val not in [
+                                            2024,
+                                            2025,
+                                            2026,
+                                            2027,
+                                        ]:
+                                            numeric_tokens.append(val)
+
+                                if numeric_tokens:
+                                    # In standard invoice layouts, quantity is the final integer on the line
+                                    extracted_counts[part_name] = numeric_tokens[-1]
+
+                # Fallback: Sequential block matching if layout mode was unavailable
+                if not extracted_counts:
+                    raw_text = "\n".join(
+                        [p.extract_text() for p in reader.pages if p.extract_text()]
+                    )
+                    # Remove date and invoice header noise
+                    raw_text = re.sub(r"\d{2}/\d{2}/\d{4}", "", raw_text)
+                    raw_text = re.sub(r"\b202\d[/-]\d+\b", "", raw_text)
+                    raw_text = re.sub(
+                        r"\b\d+\s*KG\b", "", raw_text, flags=re.IGNORECASE
+                    )
+
+                    for line in raw_text.splitlines():
                         clean_line = " ".join(line.split())
                         for part_name in df["PartName"]:
                             base_code = part_name.split("-")[0].strip().upper()
-                            if (
-                                base_code in clean_line.upper()
-                                and part_name not in found_parts
-                            ):
-                                found_parts.append(part_name)
-
-                    # 2. Extract QTY integers after stripping NET WGT / KG values
-                    found_qtys = []
-                    for line in lines:
-                        clean_line = " ".join(line.split())
-
-                        # Strip weight patterns like "1200 KG" or "1200KG"
-                        clean_no_kg = re.sub(
-                            r"\b\d+\s*KG\b", "", clean_line, flags=re.IGNORECASE
-                        )
-
-                        # Match remaining integers on lines containing QTY column headers or pure numeric data
-                        # Prevents picking up random document numbers/dates by filtering out values > 50,000 or years
-                        nums = re.findall(r"\b\d+\b", clean_no_kg)
-                        for num_str in nums:
-                            val = int(num_str)
-                            if val > 0 and val not in [
-                                2020,
-                                2021,
-                                2022,
-                                2023,
-                                2024,
-                                2025,
-                                2026,
-                                1931951,
-                            ]:
-                                found_qtys.append(val)
-
-                    # 3. Align the last N integers (matching the count of detected parts) with part codes
-                    if len(found_qtys) >= len(found_parts) and len(found_parts) > 0:
-                        # Grab exact tail slice corresponding to quantity column
-                        matched_qtys = found_qtys[-len(found_parts) :]
-                        for p_name, q_val in zip(found_parts, matched_qtys):
-                            extracted_counts[p_name] = q_val
+                            if base_code in clean_line.upper():
+                                nums = re.findall(r"\b\d+\b", clean_line)
+                                if nums:
+                                    extracted_counts[part_name] = int(nums[-1])
 
                 # Map extracted values to DataFrame order
                 new_quantities = [
-                    extracted_counts.get(p_name, 0)
-                    for p_name in df["PartName"]
+                    extracted_counts.get(p_name, 0) for p_name in df["PartName"]
                 ]
 
                 st.session_state.quantities_df["PartQuantity"] = new_quantities
@@ -530,7 +522,7 @@ if pdf_file is not None:
                     expanded=False,
                 )
                 st.sidebar.success(
-                    f"Extracted {sum(new_quantities)} total parts!"
+                    f"Extracted {sum(new_quantities)} total parts across {len([q for q in new_quantities if q > 0])} line items!"
                 )
                 st.rerun()
 
