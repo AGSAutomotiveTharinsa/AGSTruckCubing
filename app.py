@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="Trailer Tetris", layout="wide")
+st.set_page_config(page_title="Trailer Optimization", layout="wide")
 st.title("Trailer Optimization")
 
 # --- CONSTANTS (Trailer Specs) ---
@@ -41,6 +41,12 @@ manifest_data = {
 }
 
 df_manifest = pd.DataFrame(manifest_data)
+
+# The smallest container length/width that exist ANYWHERE in the container
+# catalog (not just in whatever order is currently loaded). Leftover trailer
+# space is only "usable" if something from the full catalog could occupy it.
+GLOBAL_MIN_CONTAINER_LENGTH = float(df_manifest["ContainerLength [in]"].min())
+GLOBAL_MIN_CONTAINER_WIDTH = float(df_manifest["ContainerWidth"].min())
 
 # --- GLOBAL SESSION STATE INITIALIZATION ---
 if "editor_key" not in st.session_state:
@@ -131,8 +137,6 @@ def pack_truck_realistically(containers_list):
     if not containers_list:
         return packed_items, unpacked_items, 0.0
 
-    min_container_length = min(c["length"] for c in containers_list)
-
     groups = {}
     for c in containers_list:
         key = (c["type"], c["length"], c["width"], c["height"])
@@ -153,9 +157,9 @@ def pack_truck_realistically(containers_list):
         nonlocal usable_volume, row_min_width
         if row_min_width is not None:
             leftover_width = TRAILER_WIDTH - current_y
-            if leftover_width >= row_min_width:
-                # Wide enough that another same-type container could have
-                # gone here -- it's usable capacity, just empty right now.
+            if leftover_width >= GLOBAL_MIN_CONTAINER_WIDTH:
+                # Wide enough that SOME container from the catalog could
+                # have gone here -- it's usable capacity, just empty for now.
                 usable_volume += current_row_length * leftover_width * TRAILER_HEIGHT
         row_min_width = None
 
@@ -204,9 +208,9 @@ def pack_truck_realistically(containers_list):
     close_row()  # account for whatever row was still open at the very end
 
     remaining_length = max(0.0, TRAILER_LENGTH - (current_x + current_row_length))
-    if remaining_length >= min_container_length:
-        # Enough length left for at least one more container of some type
-        # in this order -- that's genuine, usable empty space.
+    if remaining_length >= GLOBAL_MIN_CONTAINER_LENGTH:
+        # Enough length left for SOME container in the catalog to fit --
+        # that's genuine, usable empty space.
         usable_volume += remaining_length * TRAILER_WIDTH * TRAILER_HEIGHT
 
     return packed_items, unpacked_items, usable_volume
@@ -226,11 +230,14 @@ def calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, 
     packed_volume = sum(c["length"] * c["width"] * c["height"] for c in packed_items)
 
     if unpacked_items:
+        # Anything left unpacked means the trailer could not physically hold
+        # everything requested. This must always read as OVER 100%, no
+        # matter how the usable-volume estimate compares -- otherwise the
+        # percentage and the "OVERLOADED" status can end up contradicting
+        # each other, which is exactly the bug being fixed here.
         unpacked_volume = sum(c["length"] * c["width"] * c["height"] for c in unpacked_items)
-        total_volume = packed_volume + unpacked_volume
-        if usable_volume <= 0:
-            return 100.0
-        return round(max(100.0, min(999.0, 100.0 * total_volume / usable_volume)), 1)
+        overage_pct = 100.0 * unpacked_volume / usable_volume if usable_volume > 0 else 100.0
+        return round(min(999.0, 100.0 + max(overage_pct, 0.1)), 1)
 
     if usable_volume <= 0:
         # Nothing usable left (or nothing could ever be placed) -- full.
@@ -315,7 +322,7 @@ def evaluate_manifest_data(df_input):
     }
 
 
-def plot_3d_truck(packed_items, fill_percentage):
+def plot_3d_truck(packed_items, fill_percentage, is_overloaded):
     fig = go.Figure()
 
     dx, dy, dz = TRAILER_LENGTH, TRAILER_WIDTH, TRAILER_HEIGHT
@@ -361,8 +368,8 @@ def plot_3d_truck(packed_items, fill_percentage):
             )
         )
 
-    status_color = "red" if fill_percentage > 100 else "green"
-    status_label = "OVERLOADED" if fill_percentage > 100 else "SPACE OK"
+    status_color = "red" if is_overloaded else "green"
+    status_label = "OVERLOADED" if is_overloaded else "SPACE OK"
 
     fig.update_layout(
         title=dict(
@@ -518,7 +525,7 @@ if calculate_clicked:
     col_plot, col_unpacked = st.columns([6, 4])
 
     with col_plot:
-        fig_3d = plot_3d_truck(packed_items, fill_percentage)
+        fig_3d = plot_3d_truck(packed_items, fill_percentage, not is_space_ok)
         st.plotly_chart(fig_3d, use_container_width=True)
 
     with col_unpacked:
