@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="Trailer Optimization", layout="wide")
+st.set_page_config(page_title="Trailer Tetris", layout="wide")
 st.title("Trailer Optimization")
 
 # --- CONSTANTS (Trailer Specs) ---
