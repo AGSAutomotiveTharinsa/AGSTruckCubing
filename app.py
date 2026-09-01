@@ -1,21 +1,10 @@
 import io
 import math
-import os
 import re
 import pandas as pd
 import pdfplumber
 import plotly.graph_objects as go
 import streamlit as st
-from PIL import Image
-from pydantic import BaseModel, Field
-
-# --- OPTIONAL GEMINI AI IMPORTS ---
-try:
-    from google import genai
-    from google.genai import types
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Trailer Optimization", layout="wide")
@@ -23,7 +12,7 @@ st.title("Trailer Optimization")
 
 # --- CONSTANTS (Trailer Specs) ---
 TRAILER_LENGTH = 636.0  # inches (X-axis)
-TRAILER_WIDTH = 102.0   # inches (Y-axis)
+TRAILER_WIDTH = 102.0  # inches (Y-axis)
 TRAILER_HEIGHT = 110.0  # inches (Z-axis)
 MAX_WEIGHT_KG = 18824.083  # kg
 
@@ -67,66 +56,19 @@ if "quantities_df" not in st.session_state:
         }
     )
 
-# --- PYDANTIC SCHEMA FOR GEMINI AI ---
-class PartItem(BaseModel):
-    part_name: str = Field(description="The exact matching part number or base part code found on invoice")
-    quantity: int = Field(description="Total unit quantity associated with this part number")
-
-class PartExtraction(BaseModel):
-    items: list[PartItem]
-
-# --- AI & REGEX PARSING FUNCTIONS ---
-def parse_pdf_invoice_ai(pdf_file, df_manifest):
-    """Parses PDF invoice using Gemini Vision API with structured outputs."""
-    api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
-    
-    if not GEMINI_AVAILABLE or not api_key:
-        # Fall back to regex parsing if Gemini isn't configured
-        return parse_pdf_invoice_regex(pdf_file, df_manifest)
-
-    try:
-        client = genai.Client(api_key=api_key)
-        pdf_bytes = pdf_file.getvalue()
-        
-        known_parts = df_manifest["PartName"].tolist()
-        prompt = f"""
-        Extract all part numbers and their total shipped unit quantities from this invoice document.
-        Match parts against this list of valid part numbers if possible: {known_parts}.
-        Return ONLY valid line items where quantities are explicitly stated.
-        """
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[
-                types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
-                prompt
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=PartExtraction,
-                temperature=0.0
-            )
-        )
-
-        extracted_counts = {}
-        parsed_result = PartExtraction.model_validate_json(response.text)
-        
-        for item in parsed_result.items:
-            extracted_name = item.part_name.upper().strip()
-            # Match against manifest database
-            for manifest_part in df_manifest["PartName"]:
-                base_code = manifest_part.split("-")[0].strip().upper()
-                if base_code in extracted_name or extracted_name in manifest_part:
-                    extracted_counts[manifest_part] = item.quantity
-                    break
-
-        return extracted_counts
-    except Exception as e:
-        st.warning(f"AI Extraction failed for {pdf_file.name}, falling back to Regex: {e}")
-        return parse_pdf_invoice_regex(pdf_file, df_manifest)
-
-
+# --- HELPER FUNCTIONS ---
 def _extract_quantity_from_line(line):
+    """
+    Tries several common invoice quantity formats, most specific first:
+      1. "<number> EA / PCS / PC / CT / UNITS"  -- quantity BEFORE the unit,
+         the most common invoice layout, and works whether or not a weight
+         (KG) column is present at all.
+      2. A "QTY" / "QUANTITY" label followed by a number.
+      3. "KG / EA <number>"                      -- unit BEFORE the number
+         (the original pattern), kept for backward compatibility.
+      4. Fallback: the last "reasonable" standalone number on the line, for
+         invoices with no unit/weight labeling whatsoever.
+    """
     match = re.search(r"\b(\d{1,6})\s*(?:EA|PCS?|CT|UNITS?)\b", line)
     if match:
         return int(match.group(1))
@@ -147,8 +89,8 @@ def _extract_quantity_from_line(line):
     return None
 
 
-def parse_pdf_invoice_regex(pdf_file, df_manifest):
-    """Fallback parser using regex rules."""
+def parse_pdf_invoice(pdf_file, df_manifest):
+    """Extracts part quantities from a single invoice PDF."""
     extracted_counts = {}
     try:
         with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
@@ -170,6 +112,19 @@ def parse_pdf_invoice_regex(pdf_file, df_manifest):
 
 
 def pack_truck_realistically(containers_list):
+    """
+    Packs containers into the trailer using a greedy row/column/stack
+    strategy, while simultaneously measuring how much of the trailer's
+    volume is genuinely "usable" -- i.e. either occupied by a container, or
+    empty but still large enough (in every relevant dimension) to hold at
+    least one more container of the type that's already sitting there.
+
+    Pockets that are too small to ever hold another unit -- e.g. the sliver
+    of height between the top of a stack and the ceiling, a leftover strip
+    of width narrower than any container placed in that row, or a trailing
+    length shorter than the smallest container in the whole order -- are
+    excluded from usable volume entirely. They don't count as free space.
+    """
     packed_items = []
     unpacked_items = []
 
@@ -192,13 +147,15 @@ def pack_truck_realistically(containers_list):
     current_row_length = 0.0
 
     usable_volume = 0.0
-    row_min_width = None
+    row_min_width = None  # smallest container width placed in the *open* row so far
 
     def close_row():
         nonlocal usable_volume, row_min_width
         if row_min_width is not None:
             leftover_width = TRAILER_WIDTH - current_y
             if leftover_width >= row_min_width:
+                # Wide enough that another same-type container could have
+                # gone here -- it's usable capacity, just empty right now.
                 usable_volume += current_row_length * leftover_width * TRAILER_HEIGHT
         row_min_width = None
 
@@ -206,12 +163,13 @@ def pack_truck_realistically(containers_list):
         items = groups[key]
         c_type, l, w, h = key
 
+        # A container that simply can't physically fit in the trailer at all.
         if l > TRAILER_LENGTH or w > TRAILER_WIDTH:
             unpacked_items.extend(items)
             continue
 
         max_stack_z = max(1, math.floor(TRAILER_HEIGHT / h))
-        usable_stack_height = max_stack_z * h
+        usable_stack_height = max_stack_z * h  # excludes the unusable sliver above the last stacked unit
 
         item_index = 0
         total_group_items = len(items)
@@ -235,22 +193,33 @@ def pack_truck_realistically(containers_list):
                 packed_items.append({**curr_item, "position": pos})
                 item_index += 1
 
+            # This column's footprint is usable up to usable_stack_height;
+            # anything above that (up to the trailer ceiling) is wasted.
             usable_volume += l * w * usable_stack_height
             row_min_width = w if row_min_width is None else min(row_min_width, w)
 
             current_row_length = max(current_row_length, l)
             current_y += w
 
-    close_row()
+    close_row()  # account for whatever row was still open at the very end
 
     remaining_length = max(0.0, TRAILER_LENGTH - (current_x + current_row_length))
     if remaining_length >= min_container_length:
+        # Enough length left for at least one more container of some type
+        # in this order -- that's genuine, usable empty space.
         usable_volume += remaining_length * TRAILER_WIDTH * TRAILER_HEIGHT
 
     return packed_items, unpacked_items, usable_volume
 
 
 def calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, usable_volume):
+    """
+    Space Usage % = volume actually needed / volume that is genuinely usable
+    in the trailer (see pack_truck_realistically for how usable volume is
+    computed). If everything remaining in the trailer is an unusable pocket,
+    usage is reported as 100%. If items didn't fit at all, usage is reported
+    above 100%, proportional to how far over capacity the load is.
+    """
     if not containers_to_pack:
         return 0.0
 
@@ -264,12 +233,14 @@ def calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, 
         return round(max(100.0, min(999.0, 100.0 * total_volume / usable_volume)), 1)
 
     if usable_volume <= 0:
+        # Nothing usable left (or nothing could ever be placed) -- full.
         return 100.0
 
     return round(min(100.0, 100.0 * packed_volume / usable_volume), 1)
 
 
 def evaluate_manifest_data(df_input):
+    """Runs full load and fit diagnostics for a given set of part quantities."""
     working_df = df_manifest.copy()
     working_df["PartQuantity"] = df_input["PartQuantity"].values
     selected_parts = working_df[working_df["PartQuantity"] > 0].copy()
@@ -414,10 +385,6 @@ def plot_3d_truck(packed_items, fill_percentage):
 
 # --- SIDEBAR: MULTI-INVOICE UPLOAD & COMPARISON EXPORT ---
 st.sidebar.header("Batch Invoice Processing")
-
-# Option to select parsing mode
-extraction_mode = st.sidebar.radio("Extraction Engine", ["Gemini AI (Recommended)", "Regex Fallback"])
-
 uploaded_pdfs = st.sidebar.file_uploader(
     "Upload multiple AGS Invoices (PDFs)", type=["pdf"], accept_multiple_files=True
 )
@@ -425,21 +392,17 @@ uploaded_pdfs = st.sidebar.file_uploader(
 if uploaded_pdfs:
     st.sidebar.markdown("---")
     st.sidebar.subheader("📈Export Stats to Excel (.xlsx)")
-
+    
     if st.sidebar.button("Generate Excel Comparison", type="primary"):
         batch_summary_list = []
-
+        
         for pdf_file in uploaded_pdfs:
-            if extraction_mode.startswith("Gemini"):
-                extracted_counts = parse_pdf_invoice_ai(pdf_file, df_manifest)
-            else:
-                extracted_counts = parse_pdf_invoice_regex(pdf_file, df_manifest)
-
+            extracted_counts = parse_pdf_invoice(pdf_file, df_manifest)
             temp_quantities_df = pd.DataFrame({
                 "PartName": df_manifest["PartName"],
                 "PartQuantity": [extracted_counts.get(p, 0) for p in df_manifest["PartName"]]
             })
-
+            
             stats = evaluate_manifest_data(temp_quantities_df)
             if stats:
                 row_data = {"Invoice Name": pdf_file.name}
@@ -453,10 +416,11 @@ if uploaded_pdfs:
 
         summary_df = pd.DataFrame(batch_summary_list)
 
+        # Generate Excel buffer
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
             summary_df.to_excel(writer, index=False, sheet_name="Invoice Comparison")
-
+        
         excel_data = excel_buffer.getvalue()
 
         st.sidebar.download_button(
@@ -466,18 +430,15 @@ if uploaded_pdfs:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
+    # Optional: Load single file into editor
     selected_pdf_to_view = st.sidebar.selectbox(
         "Select PDF to view in Editor",
         options=[f.name for f in uploaded_pdfs],
     )
-
+    
     if st.sidebar.button("Load Selected into Table"):
         target_file = next(f for f in uploaded_pdfs if f.name == selected_pdf_to_view)
-        if extraction_mode.startswith("Gemini"):
-            extracted = parse_pdf_invoice_ai(target_file, df_manifest)
-        else:
-            extracted = parse_pdf_invoice_regex(target_file, df_manifest)
-
+        extracted = parse_pdf_invoice(target_file, df_manifest)
         st.session_state.quantities_df["PartQuantity"] = [extracted.get(p, 0) for p in df_manifest["PartName"]]
         st.session_state.editor_key += 1
         st.rerun()
@@ -562,9 +523,10 @@ if calculate_clicked:
 
     with col_unpacked:
         st.markdown("### ⚠️ Unpacked Items")
-
+        
+        # Get actual unpacked items directly from the packing calculation
         _, unpacked_items, _ = pack_truck_realistically(results["containers_to_pack"])
-
+        
         if unpacked_items:
             unpacked_df = pd.DataFrame(unpacked_items)
             summary = (
