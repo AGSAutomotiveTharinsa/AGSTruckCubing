@@ -303,7 +303,7 @@ def evaluate_manifest_data(df_input):
         if not is_weight_ok:
             reasons.append("OVERWEIGHT")
         if not is_space_ok:
-            reasons.append("OVERSPACE")
+            reasons.append("OVER SPACE")
         status = "OVERLOADED (" + " & ".join(reasons) + ")"
 
     return {
