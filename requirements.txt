@@ -5,3 +5,4 @@ py3dbp
 openpyxl
 pdfplumber
 pypdf
+google-genai pydantic pillow pdf2image
