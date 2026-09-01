@@ -57,6 +57,38 @@ if "quantities_df" not in st.session_state:
     )
 
 # --- HELPER FUNCTIONS ---
+def _extract_quantity_from_line(line):
+    """
+    Tries several common invoice quantity formats, most specific first:
+      1. "<number> EA / PCS / PC / CT / UNITS"  -- quantity BEFORE the unit,
+         the most common invoice layout, and works whether or not a weight
+         (KG) column is present at all.
+      2. A "QTY" / "QUANTITY" label followed by a number.
+      3. "KG / EA <number>"                      -- unit BEFORE the number
+         (the original pattern), kept for backward compatibility.
+      4. Fallback: the last "reasonable" standalone number on the line, for
+         invoices with no unit/weight labeling whatsoever.
+    """
+    match = re.search(r"\b(\d{1,6})\s*(?:EA|PCS?|CT|UNITS?)\b", line)
+    if match:
+        return int(match.group(1))
+
+    match = re.search(r"(?:QTY|QUANTITY)[:.\s]*\s*(\d{1,6})", line)
+    if match:
+        return int(match.group(1))
+
+    match = re.search(r"(?:KG|EA)\s*(\d{1,5})\b", line)
+    if match:
+        return int(match.group(1))
+
+    numbers = [int(n) for n in re.findall(r"\b\d+\b", line)]
+    valid_qtys = [n for n in numbers if n not in [2024, 2025, 2026, 2027, 8708] and 0 < n < 50000]
+    if valid_qtys:
+        return valid_qtys[-1]
+
+    return None
+
+
 def parse_pdf_invoice(pdf_file, df_manifest):
     """Extracts part quantities from a single invoice PDF."""
     extracted_counts = {}
@@ -71,22 +103,35 @@ def parse_pdf_invoice(pdf_file, df_manifest):
                     for part_name in df_manifest["PartName"]:
                         base_code = part_name.split("-")[0].strip().upper()
                         if base_code in line:
-                            match = re.search(r"(?:KG|EA)\s*(\d{1,5})\b", line)
-                            if match:
-                                extracted_counts[part_name] = int(match.group(1))
-                            else:
-                                numbers = [int(n) for n in re.findall(r"\b\d+\b", line)]
-                                valid_qtys = [n for n in numbers if n not in [2024, 2025, 2026, 2027, 8708] and 0 < n < 50000]
-                                if valid_qtys:
-                                    extracted_counts[part_name] = valid_qtys[-1]
+                            qty = _extract_quantity_from_line(line)
+                            if qty is not None:
+                                extracted_counts[part_name] = qty
     except Exception:
         pass
     return extracted_counts
 
 
 def pack_truck_realistically(containers_list):
+    """
+    Packs containers into the trailer using a greedy row/column/stack
+    strategy, while simultaneously measuring how much of the trailer's
+    volume is genuinely "usable" -- i.e. either occupied by a container, or
+    empty but still large enough (in every relevant dimension) to hold at
+    least one more container of the type that's already sitting there.
+
+    Pockets that are too small to ever hold another unit -- e.g. the sliver
+    of height between the top of a stack and the ceiling, a leftover strip
+    of width narrower than any container placed in that row, or a trailing
+    length shorter than the smallest container in the whole order -- are
+    excluded from usable volume entirely. They don't count as free space.
+    """
     packed_items = []
     unpacked_items = []
+
+    if not containers_list:
+        return packed_items, unpacked_items, 0.0
+
+    min_container_length = min(c["length"] for c in containers_list)
 
     groups = {}
     for c in containers_list:
@@ -101,16 +146,37 @@ def pack_truck_realistically(containers_list):
     current_y = 0.0
     current_row_length = 0.0
 
+    usable_volume = 0.0
+    row_min_width = None  # smallest container width placed in the *open* row so far
+
+    def close_row():
+        nonlocal usable_volume, row_min_width
+        if row_min_width is not None:
+            leftover_width = TRAILER_WIDTH - current_y
+            if leftover_width >= row_min_width:
+                # Wide enough that another same-type container could have
+                # gone here -- it's usable capacity, just empty right now.
+                usable_volume += current_row_length * leftover_width * TRAILER_HEIGHT
+        row_min_width = None
+
     for key in sorted_group_keys:
         items = groups[key]
         c_type, l, w, h = key
 
+        # A container that simply can't physically fit in the trailer at all.
+        if l > TRAILER_LENGTH or w > TRAILER_WIDTH:
+            unpacked_items.extend(items)
+            continue
+
         max_stack_z = max(1, math.floor(TRAILER_HEIGHT / h))
+        usable_stack_height = max_stack_z * h  # excludes the unusable sliver above the last stacked unit
+
         item_index = 0
         total_group_items = len(items)
 
         while item_index < total_group_items:
             if current_y + w > TRAILER_WIDTH:
+                close_row()
                 current_x += current_row_length
                 current_y = 0.0
                 current_row_length = 0.0
@@ -127,31 +193,50 @@ def pack_truck_realistically(containers_list):
                 packed_items.append({**curr_item, "position": pos})
                 item_index += 1
 
+            # This column's footprint is usable up to usable_stack_height;
+            # anything above that (up to the trailer ceiling) is wasted.
+            usable_volume += l * w * usable_stack_height
+            row_min_width = w if row_min_width is None else min(row_min_width, w)
+
             current_row_length = max(current_row_length, l)
             current_y += w
 
+    close_row()  # account for whatever row was still open at the very end
+
     remaining_length = max(0.0, TRAILER_LENGTH - (current_x + current_row_length))
-    return packed_items, unpacked_items, remaining_length
+    if remaining_length >= min_container_length:
+        # Enough length left for at least one more container of some type
+        # in this order -- that's genuine, usable empty space.
+        usable_volume += remaining_length * TRAILER_WIDTH * TRAILER_HEIGHT
+
+    return packed_items, unpacked_items, usable_volume
 
 
-def calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, remaining_length):
+def calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, usable_volume):
+    """
+    Space Usage % = volume actually needed / volume that is genuinely usable
+    in the trailer (see pack_truck_realistically for how usable volume is
+    computed). If everything remaining in the trailer is an unusable pocket,
+    usage is reported as 100%. If items didn't fit at all, usage is reported
+    above 100%, proportional to how far over capacity the load is.
+    """
     if not containers_to_pack:
         return 0.0
 
-    if unpacked_items:
-        return 100.0
-
-    min_c_len = min(c["length"] for c in containers_to_pack)
-
-    if remaining_length < min_c_len:
-        return 100.0
-
     packed_volume = sum(c["length"] * c["width"] * c["height"] for c in packed_items)
-    avg_stacked_h = sum(c["height"] * math.floor(TRAILER_HEIGHT / c["height"]) for c in containers_to_pack) / len(containers_to_pack)
-    avg_row_w = sum(c["width"] * math.floor(TRAILER_WIDTH / c["width"]) for c in containers_to_pack) / len(containers_to_pack)
-    
-    usable_total_volume = TRAILER_LENGTH * avg_row_w * avg_stacked_h
-    return min(100.0, (packed_volume / usable_total_volume) * 100.0)
+
+    if unpacked_items:
+        unpacked_volume = sum(c["length"] * c["width"] * c["height"] for c in unpacked_items)
+        total_volume = packed_volume + unpacked_volume
+        if usable_volume <= 0:
+            return 100.0
+        return round(max(100.0, min(999.0, 100.0 * total_volume / usable_volume)), 1)
+
+    if usable_volume <= 0:
+        # Nothing usable left (or nothing could ever be placed) -- full.
+        return 100.0
+
+    return round(min(100.0, 100.0 * packed_volume / usable_volume), 1)
 
 
 def evaluate_manifest_data(df_input):
@@ -195,8 +280,8 @@ def evaluate_manifest_data(df_input):
             total_weight += box_gross_weight
             remaining_parts -= parts_in_this_box
 
-    packed_items, unpacked_items, remaining_length = pack_truck_realistically(containers_to_pack)
-    fill_percentage = calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, remaining_length)
+    packed_items, unpacked_items, usable_volume = pack_truck_realistically(containers_to_pack)
+    fill_percentage = calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, usable_volume)
 
     total_requested = len(containers_to_pack)
     unpacked_count = len(unpacked_items)
