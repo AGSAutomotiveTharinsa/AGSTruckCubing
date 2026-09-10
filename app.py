@@ -14,7 +14,7 @@ st.title("Trailer Optimization")
 # --- POWER AUTOMATE CONFIGURATION ---
 POWER_AUTOMATE_URL = st.secrets.get(
     "POWER_AUTOMATE_URL",
-    "YOUR_POWER_AUTOMATE_HTTP_TRIGGER_URL_HERE",
+    "https://default9b2f9cbe865b4df8a5848494d8c1ef.f6.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/31/workflows/9687f733d7fb4262b4d8a2a0eff59bb4/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=RkJNO5xEsj9s4UFEK7Ov5C-LvAfgQEo5iQ0alG96w0E",
 )
 
 @st.cache_data(ttl=300)
