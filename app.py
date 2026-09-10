@@ -19,86 +19,88 @@ POWER_AUTOMATE_URL = st.secrets.get(
 
 @st.cache_data(ttl=5)
 def load_manifest_from_sharepoint(url):
-  try:
-    response = requests.get(url, timeout=15)
-    response.raise_for_status()
-
-    # Verify response body isn't empty
-    if not response.text.strip():
-      st.error(
-          "Received an empty response from Power Automate. Ensure the flow"
-          " Response step Body is populated."
-      )
-      st.stop()
-
     try:
-      data = response.json()
-    except Exception:
-      st.error(
-          "Power Automate did not return JSON. Raw output received:\n"
-          f"{response.text[:300]}"
-      )
-      st.stop()
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
 
-    # Handle wrapped JSON response bodies if nested
-    if isinstance(data, dict):
-      if "value" in data:
-        data = data["value"]
-      elif "body" in data and isinstance(data["body"], dict):
-        data = data["body"].get("value", data["body"])
+        # Verify response body isn't empty
+        if not response.text.strip():
+            st.error(
+                "Received an empty response from Power Automate. Ensure the flow"
+                " Response step Body is populated."
+            )
+            st.stop()
 
-    df = pd.DataFrame(data)
+        try:
+            data = response.json()
+        except Exception:
+            st.error(
+                "Power Automate did not return JSON. Raw output received:\n"
+                f"{response.text[:300]}"
+            )
+            st.stop()
 
-    if df.empty:
-      st.error("Received an empty dataset from Power Automate table.")
-      st.stop()
+        # Handle wrapped JSON response bodies if nested
+        if isinstance(data, dict):
+            if "value" in data:
+                data = data["value"]
+            elif "body" in data and isinstance(data["body"], dict):
+                data = data["body"].get("value", data["body"])
 
-    # Clean headers and string values
-    df.columns = df.columns.astype(str).str.strip()
+        df = pd.DataFrame(data)
 
-    expected_cols = [
-        "PartName",
-        "ContainerType",
-        "ContainerLength [in]",
-        "ContainerWidth",
-        "ContainerHeight",
-        "ContainerWeight [kg]",
-        "MaxPartsPerContainer",
-        "Weight of 1 Part [kg]",
-    ]
+        if df.empty:
+            st.error("Received an empty dataset from Power Automate table.")
+            st.stop()
 
-    missing = [col for col in expected_cols if col not in df.columns]
-    if missing:
-      st.error(
-          "Missing required columns in Power Automate JSON output:"
-          f" {missing}\nColumns found: {list(df.columns)}"
-      )
-      st.stop()
+        # Clean headers and string values
+        df.columns = df.columns.astype(str).str.strip()
 
-    numeric_cols = [
-        "ContainerLength [in]",
-        "ContainerWidth",
-        "ContainerHeight",
-        "ContainerWeight [kg]",
-        "MaxPartsPerContainer",
-        "Weight of 1 Part [kg]",
-    ]
-    for col in numeric_cols:
-      df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        expected_cols = [
+            "Plant",
+            "PartName",
+            "ContainerType",
+            "ContainerLength [in]",
+            "ContainerWidth",
+            "ContainerHeight",
+            "ContainerWeight [kg]",
+            "MaxPartsPerContainer",
+            "Weight of 1 Part [kg]",
+        ]
 
-    df["PartName"] = df["PartName"].astype(str).str.strip()
-    df["ContainerType"] = df["ContainerType"].astype(str).str.strip()
+        missing = [col for col in expected_cols if col not in df.columns]
+        if missing:
+            st.error(
+                "Missing required columns in Power Automate JSON output:"
+                f" {missing}\nColumns found: {list(df.columns)}"
+            )
+            st.stop()
 
-    df = df[
-        (df["PartName"].str.len() > 0) & (df["PartName"] != "nan")
-    ].reset_index(drop=True)
+        numeric_cols = [
+            "ContainerLength [in]",
+            "ContainerWidth",
+            "ContainerHeight",
+            "ContainerWeight [kg]",
+            "MaxPartsPerContainer",
+            "Weight of 1 Part [kg]",
+        ]
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    return df
+        df["Plant"] = df["Plant"].astype(str).str.strip()
+        df["PartName"] = df["PartName"].astype(str).str.strip()
+        df["ContainerType"] = df["ContainerType"].astype(str).str.strip()
 
-  except Exception as e:
-    st.error(f"Failed to load catalog: {e}")
-    st.stop()
-   
+        df = df[
+            (df["PartName"].str.len() > 0) & (df["PartName"] != "nan")
+        ].reset_index(drop=True)
+
+        return df
+
+    except Exception as e:
+        st.error(f"Failed to load catalog: {e}")
+        st.stop()
+    
 # Dynamic Load from Power Automate Endpoint
 df_manifest = load_manifest_from_sharepoint(POWER_AUTOMATE_URL)
 
@@ -112,48 +114,46 @@ GLOBAL_MIN_CONTAINER_LENGTH = float(df_manifest["ContainerLength [in]"].min())
 GLOBAL_MIN_CONTAINER_WIDTH = float(df_manifest["ContainerWidth"].min())
 
 # --- GLOBAL SESSION STATE INITIALIZATION ---
-# --- GLOBAL SESSION STATE INITIALIZATION ---
 if "editor_key" not in st.session_state:
-  st.session_state.editor_key = 0
+    st.session_state.editor_key = 0
 
 # Sync session state with updated SharePoint values
 if "quantities_df" not in st.session_state:
-  st.session_state.quantities_df = pd.DataFrame({
-      "PartName": df_manifest["PartName"],
-      "ContainerType": df_manifest["ContainerType"],
-      "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
-      "PartQuantity": 0,
-  })
+    st.session_state.quantities_df = pd.DataFrame({
+        "Plant": df_manifest["Plant"],
+        "PartName": df_manifest["PartName"],
+        "ContainerType": df_manifest["ContainerType"],
+        "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
+        "PartQuantity": 0,
+    })
 else:
-  # Preserve existing user-entered quantities
-  existing_qtys = dict(
-      zip(
-          st.session_state.quantities_df["PartName"],
-          st.session_state.quantities_df["PartQuantity"],
-      )
-  )
+    # Preserve existing user-entered quantities
+    existing_qtys = dict(
+        zip(
+            st.session_state.quantities_df["PartName"],
+            st.session_state.quantities_df["PartQuantity"],
+        )
+    )
 
-  # Rebuild DataFrame with updated SharePoint metadata + saved user quantities
-  st.session_state.quantities_df = pd.DataFrame({
-      "PartName": df_manifest["PartName"],
-      "ContainerType": df_manifest["ContainerType"],
-      "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
-      "PartQuantity": [
-          existing_qtys.get(p, 0) for p in df_manifest["PartName"]
-      ],
-  })
+    # Rebuild DataFrame with updated SharePoint metadata + saved user quantities
+    st.session_state.quantities_df = pd.DataFrame({
+        "Plant": df_manifest["Plant"],
+        "PartName": df_manifest["PartName"],
+        "ContainerType": df_manifest["ContainerType"],
+        "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
+        "PartQuantity": [
+            existing_qtys.get(p, 0) for p in df_manifest["PartName"]
+        ],
+    })
+
 # --- HELPER FUNCTIONS ---
 def _extract_quantity_from_line(line):
     """
     Tries several common invoice quantity formats, most specific first:
-      1. "<number> EA / PCS / PC / CT / UNITS"  -- quantity BEFORE the unit,
-         the most common invoice layout, and works whether or not a weight
-         (KG) column is present at all.
+      1. "<number> EA / PCS / PC / CT / UNITS"  -- quantity BEFORE the unit
       2. A "QTY" / "QUANTITY" label followed by a number.
       3. "KG / EA <number>"                      -- unit BEFORE the number
-         (the original pattern), kept for backward compatibility.
-      4. Fallback: the last "reasonable" standalone number on the line, for
-         invoices with no unit/weight labeling whatsoever.
+      4. Fallback: the last "reasonable" standalone number on the line
     """
     match = re.search(r"\b(\d{1,6})\s*(?:EA|PCS?|CT|UNITS?)\b", line)
     if match:
@@ -197,20 +197,16 @@ def parse_pdf_invoice(pdf_file, df_manifest):
     return extracted_counts
 
 
-def pack_truck_realistically(containers_list):
+def pack_truck_realistically(containers_list, min_container_length=None, min_container_width=None):
     """
     Packs containers into the trailer using a greedy row/column/stack
-    strategy, while simultaneously measuring how much of the trailer's
-    volume is genuinely "usable" -- i.e. either occupied by a container, or
-    empty but still large enough (in every relevant dimension) to hold at
-    least one more container of the type that's already sitting there.
-
-    Pockets that are too small to ever hold another unit -- e.g. the sliver
-    of height between the top of a stack and the ceiling, a leftover strip
-    of width narrower than any container placed in that row, or a trailing
-    length shorter than the smallest container in the whole order -- are
-    excluded from usable volume entirely. They don't count as free space.
+    strategy, while simultaneously measuring usable trailer volume.
     """
+    if min_container_length is None:
+        min_container_length = GLOBAL_MIN_CONTAINER_LENGTH
+    if min_container_width is None:
+        min_container_width = GLOBAL_MIN_CONTAINER_WIDTH
+
     packed_items = []
     unpacked_items = []
 
@@ -231,15 +227,13 @@ def pack_truck_realistically(containers_list):
     current_row_length = 0.0
 
     usable_volume = 0.0
-    row_min_width = None  # smallest container width placed in the *open* row so far
+    row_min_width = None
 
     def close_row():
         nonlocal usable_volume, row_min_width
         if row_min_width is not None:
             leftover_width = TRAILER_WIDTH - current_y
-            if leftover_width >= GLOBAL_MIN_CONTAINER_WIDTH:
-                # Wide enough that SOME container from the catalog could
-                # have gone here -- it's usable capacity, just empty for now.
+            if leftover_width >= min_container_width:
                 usable_volume += current_row_length * leftover_width * TRAILER_HEIGHT
         row_min_width = None
 
@@ -247,13 +241,12 @@ def pack_truck_realistically(containers_list):
         items = groups[key]
         c_type, l, w, h = key
 
-        # A container that simply can't physically fit in the trailer at all.
         if l > TRAILER_LENGTH or w > TRAILER_WIDTH:
             unpacked_items.extend(items)
             continue
 
         max_stack_z = max(1, math.floor(TRAILER_HEIGHT / h))
-        usable_stack_height = max_stack_z * h  # excludes the unusable sliver above the last stacked unit
+        usable_stack_height = max_stack_z * h
 
         item_index = 0
         total_group_items = len(items)
@@ -277,50 +270,34 @@ def pack_truck_realistically(containers_list):
                 packed_items.append({**curr_item, "position": pos})
                 item_index += 1
 
-            # This column's footprint is usable up to usable_stack_height;
-            # anything above that (up to the trailer ceiling) is wasted.
             usable_volume += l * w * usable_stack_height
             row_min_width = w if row_min_width is None else min(row_min_width, w)
 
             current_row_length = max(current_row_length, l)
             current_y += w
 
-    close_row()  # account for whatever row was still open at the very end
+    close_row()
 
     remaining_length = max(0.0, TRAILER_LENGTH - (current_x + current_row_length))
-    if remaining_length >= GLOBAL_MIN_CONTAINER_LENGTH:
-        # Enough length left for SOME container in the catalog to fit --
-        # that's genuine, usable empty space.
+    if remaining_length >= min_container_length:
         usable_volume += remaining_length * TRAILER_WIDTH * TRAILER_HEIGHT
 
     return packed_items, unpacked_items, usable_volume
 
 
 def calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, usable_volume):
-    """
-    Space Usage % = volume actually needed / volume that is genuinely usable
-    in the trailer (see pack_truck_realistically for how usable volume is
-    computed). If everything remaining in the trailer is an unusable pocket,
-    usage is reported as 100%. If items didn't fit at all, usage is reported
-    above 100%, proportional to how far over capacity the load is.
-    """
+    """Space Usage % calculation."""
     if not containers_to_pack:
         return 0.0
 
     packed_volume = sum(c["length"] * c["width"] * c["height"] for c in packed_items)
 
     if unpacked_items:
-        # Anything left unpacked means the trailer could not physically hold
-        # everything requested. This must always read as OVER 100%, no
-        # matter how the usable-volume estimate compares -- otherwise the
-        # percentage and the "OVERLOADED" status can end up contradicting
-        # each other, which is exactly the bug being fixed here.
         unpacked_volume = sum(c["length"] * c["width"] * c["height"] for c in unpacked_items)
         overage_pct = 100.0 * unpacked_volume / usable_volume if usable_volume > 0 else 100.0
         return round(min(999.0, 100.0 + max(overage_pct, 0.1)), 1)
 
     if usable_volume <= 0:
-        # Nothing usable left (or nothing could ever be placed) -- full.
         return 100.0
 
     return round(min(100.0, 100.0 * packed_volume / usable_volume), 1)
@@ -334,6 +311,17 @@ def evaluate_manifest_data(df_input):
 
     if selected_parts.empty:
         return None
+
+    # Determine active plants
+    active_plants = selected_parts["Plant"].dropna().unique()
+    plant_manifest_subset = df_manifest[df_manifest["Plant"].isin(active_plants)]
+
+    if not plant_manifest_subset.empty:
+        active_min_length = float(plant_manifest_subset["ContainerLength [in]"].min())
+        active_min_width = float(plant_manifest_subset["ContainerWidth"].min())
+    else:
+        active_min_length = GLOBAL_MIN_CONTAINER_LENGTH
+        active_min_width = GLOBAL_MIN_CONTAINER_WIDTH
 
     containers_to_pack = []
     total_weight = 0.0
@@ -353,6 +341,7 @@ def evaluate_manifest_data(df_input):
 
             containers_to_pack.append(
                 {
+                    "plant": str(row["Plant"]),
                     "part_name": str(row["PartName"]),
                     "name": f"{row['PartName']} (C{i+1})",
                     "type": str(row["ContainerType"]),
@@ -367,7 +356,11 @@ def evaluate_manifest_data(df_input):
             total_weight += box_gross_weight
             remaining_parts -= parts_in_this_box
 
-    packed_items, unpacked_items, usable_volume = pack_truck_realistically(containers_to_pack)
+    packed_items, unpacked_items, usable_volume = pack_truck_realistically(
+        containers_to_pack,
+        min_container_length=active_min_length,
+        min_container_width=active_min_width
+    )
     fill_percentage = calculate_fill_percentage(containers_to_pack, packed_items, unpacked_items, usable_volume)
 
     total_requested = len(containers_to_pack)
@@ -399,6 +392,8 @@ def evaluate_manifest_data(df_input):
         "packed_items": packed_items,
         "containers_to_pack": containers_to_pack,
         "fill_percentage": fill_percentage,
+        "active_min_length": active_min_length,
+        "active_min_width": active_min_width,
     }
 
 
@@ -493,7 +488,7 @@ if uploaded_pdfs:
             stats = evaluate_manifest_data(temp_quantities_df)
             if stats:
                 row_data = {"Invoice Name": pdf_file.name}
-                row_data.update({k: v for k, v in stats.items() if k not in ["packed_items", "containers_to_pack", "fill_percentage"]})
+                row_data.update({k: v for k, v in stats.items() if k not in ["packed_items", "containers_to_pack", "fill_percentage", "active_min_length", "active_min_width"]})
                 batch_summary_list.append(row_data)
             else:
                 batch_summary_list.append({
@@ -531,16 +526,34 @@ if uploaded_pdfs:
         st.rerun()
 
 # --- MAIN QUANTITY ENTRY SECTION ---
-# --- MAIN QUANTITY ENTRY SECTION ---
 st.subheader("1. Enter Order Quantities")
 
+# Search Bar implementation
+search_query = st.text_input(
+    "🔍 Search Catalog (by Part Name, Plant, or Container Type):",
+    value="",
+    placeholder="Type part number or plant..."
+)
+
+# Filter the dataframe for display based on search query
+if search_query.strip():
+    query = search_query.strip().lower()
+    filtered_df = st.session_state.quantities_df[
+        st.session_state.quantities_df["PartName"].str.lower().str.contains(query) |
+        st.session_state.quantities_df["Plant"].str.lower().str.contains(query) |
+        st.session_state.quantities_df["ContainerType"].str.lower().str.contains(query)
+    ]
+else:
+    filtered_df = st.session_state.quantities_df.copy()
+
 edited_df = st.data_editor(
-    st.session_state.quantities_df,
-    key=f"editor_widget_{st.session_state.editor_key}",
+    filtered_df,
+    key=f"editor_widget_{st.session_state.editor_key}_{search_query}",
     num_rows="fixed",
-    disabled=["PartName", "ContainerType", "MaxPartsPerContainer"],
+    disabled=["Plant", "PartName", "ContainerType", "MaxPartsPerContainer"],
     use_container_width=True,
     column_config={
+        "Plant": st.column_config.TextColumn("Plant", width="small"),
         "PartName": st.column_config.TextColumn("Part Name", width="large"),
         "ContainerType": st.column_config.TextColumn("Container Type", width="medium"),
         "MaxPartsPerContainer": st.column_config.NumberColumn("Max Parts / Container", width="medium"),
@@ -548,7 +561,14 @@ edited_df = st.data_editor(
     },
 )
 
-st.session_state.quantities_df = edited_df
+# Sync edits from filtered view back into global quantities_df session state
+if not edited_df.empty:
+    for idx, row in edited_df.iterrows():
+        part_name = row["PartName"]
+        new_qty = row["PartQuantity"]
+        st.session_state.quantities_df.loc[
+            st.session_state.quantities_df["PartName"] == part_name, "PartQuantity"
+        ] = new_qty
 
 col_calc, col_clear, _ = st.columns([2, 2, 4])
 
@@ -560,10 +580,6 @@ with col_clear:
         st.session_state.quantities_df["PartQuantity"] = 0
         st.session_state.editor_key += 1
         st.rerun()
-
-
-
-
 
 # --- CALCULATION AND PLOTTING ---
 if calculate_clicked:
@@ -619,8 +635,11 @@ if calculate_clicked:
     with col_unpacked:
         st.markdown("### ⚠️ Unpacked Items")
         
-        # Get actual unpacked items directly from the packing calculation
-        _, unpacked_items, _ = pack_truck_realistically(results["containers_to_pack"])
+        _, unpacked_items, _ = pack_truck_realistically(
+            results["containers_to_pack"],
+            min_container_length=results["active_min_length"],
+            min_container_width=results["active_min_width"]
+        )
         
         if unpacked_items:
             unpacked_df = pd.DataFrame(unpacked_items)
