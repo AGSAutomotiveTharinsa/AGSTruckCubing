@@ -23,58 +23,40 @@ def load_manifest_from_sharepoint(url):
     response = requests.get(url, timeout=15)
     response.raise_for_status()
 
-    content = response.content
+    data = response.json()
 
-    # Decode Power Automate wrapped JSON if present
-    try:
-      data = json.loads(content)
-      if isinstance(data, dict) and "$content" in data:
-        content = base64.b64decode(data["$content"])
-      elif isinstance(data, dict) and "body" in data and "$content" in data["body"]:
-        content = base64.b64decode(data["body"]["$content"])
-    except Exception:
-      pass
+    # Handle wrapped JSON response bodies if nested
+    if isinstance(data, dict) and "value" in data:
+      data = data["value"]
 
-    # Read all sheets/rows raw to find the table
-    df = pd.read_excel(io.BytesIO(content))
+    df = pd.DataFrame(data)
 
-    # Clean headers by removing non-alphanumeric chars and converting to lowercase for comparison
-    def clean_key(s):
-      return re.sub(r"[^a-zA-Z0-9]", "", str(s)).lower()
-
-    # Map of required target names to fuzzy key
-    target_mapping = {
-        "partname": "PartName",
-        "containertype": "ContainerType",
-        "containerlengthin": "ContainerLength [in]",
-        "containerwidth": "ContainerWidth",
-        "containerheight": "ContainerHeight",
-        "containerweightkg": "ContainerWeight [kg]",
-        "maxpartspercontainer": "MaxPartsPerContainer",
-        "weightof1partkg": "Weight of 1 Part [kg]",
-    }
-
-    # Find matching columns in the Excel file
-    col_rename = {}
-    for col in df.columns:
-      cleaned = clean_key(col)
-      if cleaned in target_mapping:
-        col_rename[col] = target_mapping[cleaned]
-
-    df = df.rename(columns=col_rename)
-
-    # Validate that we matched the required columns
-    missing = [
-        target
-        for key, target in target_mapping.items()
-        if target not in df.columns
-    ]
-    if missing:
-      # If still missing, show what columns pandas ACTUALLY sees to debug instantly
-      st.error(f"Could not map columns. Found in file: {list(df.columns)}")
+    if df.empty:
+      st.error("Received empty parts table from Power Automate.")
       st.stop()
 
-    # Parse numeric values
+    # Clean headers and values
+    df.columns = df.columns.astype(str).str.strip()
+
+    expected_cols = [
+        "PartName",
+        "ContainerType",
+        "ContainerLength [in]",
+        "ContainerWidth",
+        "ContainerHeight",
+        "ContainerWeight [kg]",
+        "MaxPartsPerContainer",
+        "Weight of 1 Part [kg]",
+    ]
+
+    missing = [col for col in expected_cols if col not in df.columns]
+    if missing:
+      st.error(
+          "Missing required columns in Power Automate response:"
+          f" {missing}\nReceived columns: {list(df.columns)}"
+      )
+      st.stop()
+
     numeric_cols = [
         "ContainerLength [in]",
         "ContainerWidth",
@@ -89,7 +71,6 @@ def load_manifest_from_sharepoint(url):
     df["PartName"] = df["PartName"].astype(str).str.strip()
     df["ContainerType"] = df["ContainerType"].astype(str).str.strip()
 
-    # Filter out empty rows
     df = df[
         (df["PartName"].str.len() > 0) & (df["PartName"] != "nan")
     ].reset_index(drop=True)
@@ -97,9 +78,11 @@ def load_manifest_from_sharepoint(url):
     return df
 
   except Exception as e:
-    st.error(f"Failed to fetch parts catalog from SharePoint: {e}")
+    st.error(f"Failed to fetch parts catalog from Power Automate: {e}")
     st.stop()
 
+
+   
 # Dynamic Load from Power Automate Endpoint
 df_manifest = load_manifest_from_sharepoint(POWER_AUTOMATE_URL)
 
