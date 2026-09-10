@@ -100,7 +100,7 @@ def load_manifest_from_sharepoint(url):
     except Exception as e:
         st.error(f"Failed to load catalog: {e}")
         st.stop()
-    
+
 # Dynamic Load from Power Automate Endpoint
 df_manifest = load_manifest_from_sharepoint(POWER_AUTOMATE_URL)
 
@@ -550,14 +550,15 @@ edited_df = st.data_editor(
     filtered_df,
     key=f"editor_widget_{st.session_state.editor_key}_{search_query}",
     num_rows="fixed",
+    hide_index=True,
     disabled=["Plant", "PartName", "ContainerType", "MaxPartsPerContainer"],
     use_container_width=True,
     column_config={
-        "Plant": st.column_config.TextColumn("Plant", width="small"),
-        "PartName": st.column_config.TextColumn("Part Name", width="large"),
-        "ContainerType": st.column_config.TextColumn("Container Type", width="medium"),
-        "MaxPartsPerContainer": st.column_config.NumberColumn("Max Parts / Container", width="medium"),
-        "PartQuantity": st.column_config.NumberColumn("Part Quantity", width="medium", min_value=0, step=1),
+        "Plant": st.column_config.TextColumn("Plant", width=100),
+        "PartName": st.column_config.TextColumn("Part Name", width=260),
+        "ContainerType": st.column_config.TextColumn("Container Type", width=140),
+        "MaxPartsPerContainer": st.column_config.NumberColumn("Max Parts / Container", width=150),
+        "PartQuantity": st.column_config.NumberColumn("Part Quantity", width=140, min_value=0, step=1),
     },
 )
 
