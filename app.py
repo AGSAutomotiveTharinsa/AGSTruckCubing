@@ -518,32 +518,35 @@ if uploaded_pdfs:
         st.rerun()
 
 # --- MAIN QUANTITY ENTRY SECTION ---
-left_pad, center_col, right_pad = st.columns([1, 2, 1])
+# --- MAIN QUANTITY ENTRY SECTION ---
+st.subheader("1. Enter Order Quantities")
 
-with center_col:
-    st.subheader("1. Enter Order Quantities")
+edited_df = st.data_editor(
+    st.session_state.quantities_df,
+    key=f"editor_widget_{st.session_state.editor_key}",
+    num_rows="fixed",
+    disabled=["PartName", "ContainerType", "MaxPartsPerContainer"],
+    use_container_width=True,
+    column_config={
+        "PartName": st.column_config.TextColumn("Part Name", use_container_width=True),
+        "ContainerType": st.column_config.TextColumn("Container Type", use_container_width=True),
+        "MaxPartsPerContainer": st.column_config.NumberColumn("Max Parts / Container", use_container_width=True),
+        "PartQuantity": st.column_config.NumberColumn("Part Quantity", use_container_width=True, min_value=0, step=1),
+    },
+)
 
-    edited_df = st.data_editor(
-        st.session_state.quantities_df,
-        key=f"editor_widget_{st.session_state.editor_key}",
-        num_rows="fixed",
-        disabled=["PartName", "ContainerType", "MaxPartsPerContainer"],
-        use_container_width=True,
-    )
+st.session_state.quantities_df = edited_df
 
-    st.session_state.quantities_df = edited_df
+col_calc, col_clear, _ = st.columns([2, 2, 4])
 
-    col_calc, col_clear = st.columns([3, 2])
+with col_calc:
+    calculate_clicked = st.button("Calculate Truck Load & Spatial Fit", type="primary", use_container_width=True)
 
-    with col_calc:
-        calculate_clicked = st.button("Calculate Truck Load & Spatial Fit", type="primary", use_container_width=True)
-
-    with col_clear:
-        if st.button("Clear Quantities", use_container_width=True):
-            st.session_state.quantities_df["PartQuantity"] = 0
-            st.session_state.editor_key += 1
-            st.rerun()
-
+with col_clear:
+    if st.button("Clear Quantities", use_container_width=True):
+        st.session_state.quantities_df["PartQuantity"] = 0
+        st.session_state.editor_key += 1
+        st.rerun()
 # --- CALCULATION AND PLOTTING ---
 if calculate_clicked:
     results = evaluate_manifest_data(st.session_state.quantities_df)
