@@ -19,60 +19,66 @@ POWER_AUTOMATE_URL = st.secrets.get(
 
 @st.cache_data(ttl=300)
 def load_manifest_from_sharepoint(url):
+  try:
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
+
+    content = response.content
+
+    # Handle Power Automate wrapped JSON responses
     try:
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-        
-        # Read raw excel as string matrix to catch all text cells reliably
-        raw_df = pd.read_excel(io.BytesIO(response.content), header=None, dtype=str)
-        
-        # Find which row contains "PartName" (case-insensitive and trimmed)
-        header_row_idx = None
-        for idx, row in raw_df.iterrows():
-            row_cleaned = row.dropna().astype(str).str.strip().str.lower().tolist()
-            if "partname" in row_cleaned:
-                header_row_idx = idx
-                break
-                
-        if header_row_idx is None:
-            st.error("Could not find a header row containing 'PartName' in the Excel file.")
-            st.stop()
-            
-        # Parse sheet with the exact header row
-        df = pd.read_excel(io.BytesIO(response.content), header=header_row_idx)
-        
-        # Clean column names
-        df.columns = df.columns.astype(str).str.strip()
-        
-        expected_cols = [
-            "PartName", "ContainerType", "ContainerLength [in]",
-            "ContainerWidth", "ContainerHeight", "ContainerWeight [kg]",
-            "MaxPartsPerContainer", "Weight of 1 Part [kg]"
-        ]
-        
-        missing = [col for col in expected_cols if col not in df.columns]
-        if missing:
-            st.error(f"Missing required columns in SharePoint Excel: {missing}")
-            st.stop()
-            
-        # Clean numeric data types
-        numeric_cols = [
-            "ContainerLength [in]", "ContainerWidth", "ContainerHeight",
-            "ContainerWeight [kg]", "MaxPartsPerContainer", "Weight of 1 Part [kg]"
-        ]
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-            
-        df["PartName"] = df["PartName"].astype(str).str.strip()
-        df["ContainerType"] = df["ContainerType"].astype(str).str.strip()
-        
-        # Filter empty rows
-        df = df[df["PartName"].str.len() > 0].reset_index(drop=True)
-        
-        return df
-    except Exception as e:
-        st.error(f"Failed to fetch parts catalog from SharePoint: {e}")
-        st.stop()
+      data = json.loads(content)
+      if isinstance(data, dict) and "$content" in data:
+        content = base64.b64decode(data["$content"])
+      elif isinstance(data, dict) and "body" in data and "$content" in data["body"]:
+        content = base64.b64decode(data["body"]["$content"])
+    except Exception:
+      pass  # Content is already raw binary bytes
+
+    # Read the Excel file directly
+    df = pd.read_excel(io.BytesIO(content))
+
+    # Clean header strings
+    df.columns = df.columns.astype(str).str.strip()
+
+    expected_cols = [
+        "PartName",
+        "ContainerType",
+        "ContainerLength [in]",
+        "ContainerWidth",
+        "ContainerHeight",
+        "ContainerWeight [kg]",
+        "MaxPartsPerContainer",
+        "Weight of 1 Part [kg]",
+    ]
+
+    missing = [col for col in expected_cols if col not in df.columns]
+    if missing:
+      st.error(f"Missing required columns in SharePoint Excel: {missing}")
+      st.stop()
+
+    # Cast numeric columns
+    numeric_cols = [
+        "ContainerLength [in]",
+        "ContainerWidth",
+        "ContainerHeight",
+        "ContainerWeight [kg]",
+        "MaxPartsPerContainer",
+        "Weight of 1 Part [kg]",
+    ]
+    for col in numeric_cols:
+      df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    df["PartName"] = df["PartName"].astype(str).str.strip()
+    df["ContainerType"] = df["ContainerType"].astype(str).str.strip()
+
+    # Drop empty rows
+    df = df[df["PartName"].str.len() > 0].reset_index(drop=True)
+
+    return df
+  except Exception as e:
+    st.error(f"Failed to fetch parts catalog from SharePoint: {e}")
+    st.stop()
 
 # Dynamic Load from Power Automate Endpoint
 df_manifest = load_manifest_from_sharepoint(POWER_AUTOMATE_URL)
