@@ -23,19 +23,37 @@ def load_manifest_from_sharepoint(url):
     response = requests.get(url, timeout=15)
     response.raise_for_status()
 
-    data = response.json()
+    # Verify response body isn't empty
+    if not response.text.strip():
+      st.error(
+          "Received an empty response from Power Automate. Ensure the flow"
+          " Response step Body is populated."
+      )
+      st.stop()
+
+    try:
+      data = response.json()
+    except Exception:
+      st.error(
+          "Power Automate did not return JSON. Raw output received:\n"
+          f"{response.text[:300]}"
+      )
+      st.stop()
 
     # Handle wrapped JSON response bodies if nested
-    if isinstance(data, dict) and "value" in data:
-      data = data["value"]
+    if isinstance(data, dict):
+      if "value" in data:
+        data = data["value"]
+      elif "body" in data and isinstance(data["body"], dict):
+        data = data["body"].get("value", data["body"])
 
     df = pd.DataFrame(data)
 
     if df.empty:
-      st.error("Received empty parts table from Power Automate.")
+      st.error("Received an empty dataset from Power Automate table.")
       st.stop()
 
-    # Clean headers and values
+    # Clean headers and string values
     df.columns = df.columns.astype(str).str.strip()
 
     expected_cols = [
@@ -52,8 +70,8 @@ def load_manifest_from_sharepoint(url):
     missing = [col for col in expected_cols if col not in df.columns]
     if missing:
       st.error(
-          "Missing required columns in Power Automate response:"
-          f" {missing}\nReceived columns: {list(df.columns)}"
+          "Missing required columns in Power Automate JSON output:"
+          f" {missing}\nColumns found: {list(df.columns)}"
       )
       st.stop()
 
@@ -78,10 +96,8 @@ def load_manifest_from_sharepoint(url):
     return df
 
   except Exception as e:
-    st.error(f"Failed to fetch parts catalog from Power Automate: {e}")
+    st.error(f"Failed to load catalog: {e}")
     st.stop()
-
-
    
 # Dynamic Load from Power Automate Endpoint
 df_manifest = load_manifest_from_sharepoint(POWER_AUTOMATE_URL)
