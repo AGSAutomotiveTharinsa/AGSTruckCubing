@@ -23,24 +23,25 @@ def load_manifest_from_sharepoint(url):
         response = requests.get(url, timeout=15)
         response.raise_for_status()
         
-        # Read raw Excel file
-        raw_df = pd.read_excel(io.BytesIO(response.content), header=None)
+        # Read raw excel as string matrix to catch all text cells reliably
+        raw_df = pd.read_excel(io.BytesIO(response.content), header=None, dtype=str)
         
-        # Find which row actually contains "PartName"
+        # Find which row contains "PartName" (case-insensitive and trimmed)
         header_row_idx = None
         for idx, row in raw_df.iterrows():
-            if "PartName" in row.values:
+            row_cleaned = row.dropna().astype(str).str.strip().str.lower().tolist()
+            if "partname" in row_cleaned:
                 header_row_idx = idx
                 break
                 
         if header_row_idx is None:
-            st.error("Could not find a row containing 'PartName' in the Excel sheet.")
+            st.error("Could not find a header row containing 'PartName' in the Excel file.")
             st.stop()
             
-        # Re-read or slice the dataframe starting from the detected header row
+        # Parse sheet with the exact header row
         df = pd.read_excel(io.BytesIO(response.content), header=header_row_idx)
         
-        # Clean column names (strip spaces/unwanted characters)
+        # Clean column names
         df.columns = df.columns.astype(str).str.strip()
         
         expected_cols = [
@@ -54,7 +55,7 @@ def load_manifest_from_sharepoint(url):
             st.error(f"Missing required columns in SharePoint Excel: {missing}")
             st.stop()
             
-        # Clean numeric columns
+        # Clean numeric data types
         numeric_cols = [
             "ContainerLength [in]", "ContainerWidth", "ContainerHeight",
             "ContainerWeight [kg]", "MaxPartsPerContainer", "Weight of 1 Part [kg]"
@@ -65,7 +66,7 @@ def load_manifest_from_sharepoint(url):
         df["PartName"] = df["PartName"].astype(str).str.strip()
         df["ContainerType"] = df["ContainerType"].astype(str).str.strip()
         
-        # Drop empty rows
+        # Filter empty rows
         df = df[df["PartName"].str.len() > 0].reset_index(drop=True)
         
         return df
