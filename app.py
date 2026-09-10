@@ -23,10 +23,24 @@ def load_manifest_from_sharepoint(url):
         response = requests.get(url, timeout=15)
         response.raise_for_status()
         
-        # Read Excel binary directly into DataFrame
-        df = pd.read_excel(io.BytesIO(response.content))
+        # Read raw Excel file
+        raw_df = pd.read_excel(io.BytesIO(response.content), header=None)
         
-        # Clean column names (strip whitespace)
+        # Find which row actually contains "PartName"
+        header_row_idx = None
+        for idx, row in raw_df.iterrows():
+            if "PartName" in row.values:
+                header_row_idx = idx
+                break
+                
+        if header_row_idx is None:
+            st.error("Could not find a row containing 'PartName' in the Excel sheet.")
+            st.stop()
+            
+        # Re-read or slice the dataframe starting from the detected header row
+        df = pd.read_excel(io.BytesIO(response.content), header=header_row_idx)
+        
+        # Clean column names (strip spaces/unwanted characters)
         df.columns = df.columns.astype(str).str.strip()
         
         expected_cols = [
@@ -40,7 +54,7 @@ def load_manifest_from_sharepoint(url):
             st.error(f"Missing required columns in SharePoint Excel: {missing}")
             st.stop()
             
-        # Ensure correct data types and fill missing numeric values to prevent crashes
+        # Clean numeric columns
         numeric_cols = [
             "ContainerLength [in]", "ContainerWidth", "ContainerHeight",
             "ContainerWeight [kg]", "MaxPartsPerContainer", "Weight of 1 Part [kg]"
@@ -50,6 +64,9 @@ def load_manifest_from_sharepoint(url):
             
         df["PartName"] = df["PartName"].astype(str).str.strip()
         df["ContainerType"] = df["ContainerType"].astype(str).str.strip()
+        
+        # Drop empty rows
+        df = df[df["PartName"].str.len() > 0].reset_index(drop=True)
         
         return df
     except Exception as e:
