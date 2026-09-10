@@ -28,7 +28,7 @@ POWER_AUTOMATE_URL = st.secrets.get(
 @st.cache_data(ttl=300)  # Caches catalog for 5 minutes
 def load_manifest_from_sharepoint(url):
     try:
-        response = requests.post(url, timeout=15)
+        response = requests.get(url, timeout=15)
         response.raise_for_status()
         
         # Read Excel binary response directly into DataFrame
