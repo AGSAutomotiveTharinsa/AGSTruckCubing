@@ -112,23 +112,36 @@ GLOBAL_MIN_CONTAINER_LENGTH = float(df_manifest["ContainerLength [in]"].min())
 GLOBAL_MIN_CONTAINER_WIDTH = float(df_manifest["ContainerWidth"].min())
 
 # --- GLOBAL SESSION STATE INITIALIZATION ---
+# --- GLOBAL SESSION STATE INITIALIZATION ---
 if "editor_key" not in st.session_state:
-    st.session_state.editor_key = 0
+  st.session_state.editor_key = 0
 
-# Sync session state with the dynamic SharePoint manifest
-if (
-    "quantities_df" not in st.session_state
-    or len(st.session_state.quantities_df) != len(df_manifest)
-    or list(st.session_state.quantities_df["PartName"]) != list(df_manifest["PartName"])
-):
-    st.session_state.quantities_df = pd.DataFrame(
-        {
-            "PartName": df_manifest["PartName"],
-            "ContainerType": df_manifest["ContainerType"],
-            "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
-            "PartQuantity": 0,
-        }
-    )
+# Sync session state with updated SharePoint values
+if "quantities_df" not in st.session_state:
+  st.session_state.quantities_df = pd.DataFrame({
+      "PartName": df_manifest["PartName"],
+      "ContainerType": df_manifest["ContainerType"],
+      "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
+      "PartQuantity": 0,
+  })
+else:
+  # Preserve existing user-entered quantities
+  existing_qtys = dict(
+      zip(
+          st.session_state.quantities_df["PartName"],
+          st.session_state.quantities_df["PartQuantity"],
+      )
+  )
+
+  # Rebuild DataFrame with updated SharePoint metadata + saved user quantities
+  st.session_state.quantities_df = pd.DataFrame({
+      "PartName": df_manifest["PartName"],
+      "ContainerType": df_manifest["ContainerType"],
+      "MaxPartsPerContainer": df_manifest["MaxPartsPerContainer"],
+      "PartQuantity": [
+          existing_qtys.get(p, 0) for p in df_manifest["PartName"]
+      ],
+  })
 # --- HELPER FUNCTIONS ---
 def _extract_quantity_from_line(line):
     """
