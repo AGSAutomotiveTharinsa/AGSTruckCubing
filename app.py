@@ -528,10 +528,10 @@ edited_df = st.data_editor(
     disabled=["PartName", "ContainerType", "MaxPartsPerContainer"],
     use_container_width=True,
     column_config={
-        "PartName": st.column_config.TextColumn("Part Name", use_container_width=True),
-        "ContainerType": st.column_config.TextColumn("Container Type", use_container_width=True),
-        "MaxPartsPerContainer": st.column_config.NumberColumn("Max Parts / Container", use_container_width=True),
-        "PartQuantity": st.column_config.NumberColumn("Part Quantity", use_container_width=True, min_value=0, step=1),
+        "PartName": st.column_config.TextColumn("Part Name", width="large"),
+        "ContainerType": st.column_config.TextColumn("Container Type", width="medium"),
+        "MaxPartsPerContainer": st.column_config.NumberColumn("Max Parts / Container", width="medium"),
+        "PartQuantity": st.column_config.NumberColumn("Part Quantity", width="medium", min_value=0, step=1),
     },
 )
 
@@ -547,6 +547,11 @@ with col_clear:
         st.session_state.quantities_df["PartQuantity"] = 0
         st.session_state.editor_key += 1
         st.rerun()
+
+
+
+
+
 # --- CALCULATION AND PLOTTING ---
 if calculate_clicked:
     results = evaluate_manifest_data(st.session_state.quantities_df)
