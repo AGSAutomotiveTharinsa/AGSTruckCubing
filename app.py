@@ -4,11 +4,60 @@ import re
 import pandas as pd
 import pdfplumber
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Trailer Tetris", layout="wide")
 st.title("Trailer Optimization")
+
+# --- POWER AUTOMATE CONFIGURATION ---
+POWER_AUTOMATE_URL = st.secrets.get(
+    "POWER_AUTOMATE_URL",
+    "YOUR_POWER_AUTOMATE_HTTP_TRIGGER_URL_HERE",
+)
+
+@st.cache_data(ttl=300)
+def load_manifest_from_sharepoint(url):
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        
+        # Read Excel binary directly into DataFrame
+        df = pd.read_excel(io.BytesIO(response.content))
+        
+        # Clean column names (strip whitespace)
+        df.columns = df.columns.astype(str).str.strip()
+        
+        expected_cols = [
+            "PartName", "ContainerType", "ContainerLength [in]",
+            "ContainerWidth", "ContainerHeight", "ContainerWeight [kg]",
+            "MaxPartsPerContainer", "Weight of 1 Part [kg]"
+        ]
+        
+        missing = [col for col in expected_cols if col not in df.columns]
+        if missing:
+            st.error(f"Missing required columns in SharePoint Excel: {missing}")
+            st.stop()
+            
+        # Ensure correct data types and fill missing numeric values to prevent crashes
+        numeric_cols = [
+            "ContainerLength [in]", "ContainerWidth", "ContainerHeight",
+            "ContainerWeight [kg]", "MaxPartsPerContainer", "Weight of 1 Part [kg]"
+        ]
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            
+        df["PartName"] = df["PartName"].astype(str).str.strip()
+        df["ContainerType"] = df["ContainerType"].astype(str).str.strip()
+        
+        return df
+    except Exception as e:
+        st.error(f"Failed to fetch parts catalog from SharePoint: {e}")
+        st.stop()
+
+# Dynamic Load from Power Automate Endpoint
+df_manifest = load_manifest_from_sharepoint(POWER_AUTOMATE_URL)
 
 # --- CONSTANTS (Trailer Specs) ---
 TRAILER_LENGTH = 636.0  # inches (X-axis)
@@ -16,47 +65,6 @@ TRAILER_WIDTH = 102.0  # inches (Y-axis)
 TRAILER_HEIGHT = 110.0  # inches (Z-axis)
 MAX_WEIGHT_KG = 18824.083  # kg
 
-import requests
-
-# --- POWER AUTOMATE CONFIGURATION ---
-# Store this in .streamlit/secrets.toml as POWER_AUTOMATE_URL = "your_url_here"
-POWER_AUTOMATE_URL = st.secrets.get(
-    "POWER_AUTOMATE_URL", 
-    "https://default9b2f9cbe865b4df8a5848494d8c1ef.f6.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/31/workflows/9687f733d7fb4262b4d8a2a0eff59bb4/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=RkJNO5xEsj9s4UFEK7Ov5C-LvAfgQEo5iQ0alG96w0E"
-)
-
-@st.cache_data(ttl=300)  # Caches catalog for 5 minutes
-def load_manifest_from_sharepoint(url):
-    try:
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-        
-        # Read Excel binary response directly into DataFrame
-        df = pd.read_excel(io.BytesIO(response.content))
-        
-        # Ensure column types and formats match expected types
-        expected_cols = [
-            "PartName", "ContainerType", "ContainerLength [in]", 
-            "ContainerWidth", "ContainerHeight", "ContainerWeight [kg]", 
-            "MaxPartsPerContainer", "Weight of 1 Part [kg]"
-        ]
-        
-        for col in expected_cols:
-            if col not in df.columns:
-                st.error(f"Missing required column in SharePoint Excel: {col}")
-                st.stop()
-                
-        return df
-    except Exception as e:
-        st.error(f"Failed to fetch parts catalog from SharePoint: {e}")
-        st.stop()
-
-# Dynamic Load
-df_manifest = load_manifest_from_sharepoint(POWER_AUTOMATE_URL)
-
-# The smallest container length/width that exist ANYWHERE in the container
-# catalog (not just in whatever order is currently loaded). Leftover trailer
-# space is only "usable" if something from the full catalog could occupy it.
 GLOBAL_MIN_CONTAINER_LENGTH = float(df_manifest["ContainerLength [in]"].min())
 GLOBAL_MIN_CONTAINER_WIDTH = float(df_manifest["ContainerWidth"].min())
 
@@ -64,7 +72,12 @@ GLOBAL_MIN_CONTAINER_WIDTH = float(df_manifest["ContainerWidth"].min())
 if "editor_key" not in st.session_state:
     st.session_state.editor_key = 0
 
-if "quantities_df" not in st.session_state:
+# Sync session state with the dynamic SharePoint manifest
+if (
+    "quantities_df" not in st.session_state
+    or len(st.session_state.quantities_df) != len(df_manifest)
+    or list(st.session_state.quantities_df["PartName"]) != list(df_manifest["PartName"])
+):
     st.session_state.quantities_df = pd.DataFrame(
         {
             "PartName": df_manifest["PartName"],
@@ -73,7 +86,6 @@ if "quantities_df" not in st.session_state:
             "PartQuantity": 0,
         }
     )
-
 # --- HELPER FUNCTIONS ---
 def _extract_quantity_from_line(line):
     """
