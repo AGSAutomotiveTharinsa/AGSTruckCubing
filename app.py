@@ -175,9 +175,35 @@ def _extract_quantity_from_line(line):
     return None
 
 
+def _sub_codes_for_part(part_name):
+    """
+    Splits a catalog PartName into the individual customer part codes it
+    represents. Most parts are a single code. Shared-container entries are
+    written as "CODE_A/CODE_B" (two different parts packed into the same
+    container) -- each side is its own line item on an invoice, so each
+    needs to be matched independently.
+    """
+    return [
+        code.split("-")[0].strip().upper()
+        for code in str(part_name).split("/")
+        if code.strip()
+    ]
+
+
 def parse_pdf_invoice(pdf_file, df_manifest):
-    """Extracts part quantities from a single invoice PDF."""
-    extracted_counts = {}
+    """
+    Extracts part quantities from a single invoice PDF.
+
+    For shared-container catalog entries ("CODE_A/CODE_B"), the invoice
+    lists CODE_A and CODE_B as two separate line items, each with its own
+    quantity. Since the catalog tracks them as one combined row, the
+    quantities found for each side are SUMMED into that row's total.
+    """
+    # part_name -> {sub_code: qty}, so each side of a shared-container pair
+    # contributes independently and nothing gets double-counted if the same
+    # sub-code is matched more than once.
+    contributions = {}
+
     try:
         with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
             for page in pdf.pages:
@@ -187,14 +213,15 @@ def parse_pdf_invoice(pdf_file, df_manifest):
 
                 for line in lines:
                     for part_name in df_manifest["PartName"]:
-                        base_code = part_name.split("-")[0].strip().upper()
-                        if base_code in line:
-                            qty = _extract_quantity_from_line(line)
-                            if qty is not None:
-                                extracted_counts[part_name] = qty
+                        for sub_code in _sub_codes_for_part(part_name):
+                            if sub_code in line:
+                                qty = _extract_quantity_from_line(line)
+                                if qty is not None:
+                                    contributions.setdefault(part_name, {})[sub_code] = qty
     except Exception:
         pass
-    return extracted_counts
+
+    return {part_name: sum(sub_qtys.values()) for part_name, sub_qtys in contributions.items()}
 
 
 def pack_truck_realistically(containers_list, min_container_length=None, min_container_width=None):
