@@ -546,7 +546,9 @@ if uploaded_pdfs:
                     "active_min_length",
                     "active_min_width",
                     "Weight Capacity (kg)",
-                ]
+                    "Packed Containers",
+                    "Unpacked Containers",
+            ]
                 row_data.update({k: v for k, v in stats.items() if k not in excluded_keys})
             else:
                 row_data.update({
