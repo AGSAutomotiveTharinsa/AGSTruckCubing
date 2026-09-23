@@ -192,22 +192,23 @@ def _sub_codes_for_part(part_name):
 
 def parse_pdf_invoice(pdf_file, df_manifest):
     """
-    Extracts part quantities from a single invoice PDF.
-
-    For shared-container catalog entries ("CODE_A/CODE_B"), the invoice
-    lists CODE_A and CODE_B as two separate line items, each with its own
-    quantity. Since the catalog tracks them as one combined row, the
-    quantities found for each side are SUMMED into that row's total.
+    Extracts part quantities and invoice header metadata (Trailer Car No., Ship Date, BOL)
+    from a single invoice PDF.
     """
-    # part_name -> {sub_code: qty}, so each side of a shared-container pair
-    # contributes independently and nothing gets double-counted if the same
-    # sub-code is matched more than once.
     contributions = {}
+    metadata = {
+        "Trailer Car No.": "N/A",
+        "Ship Date": "N/A",
+        "BOL": "N/A",
+    }
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_file.getvalue())) as pdf:
+            full_text = ""
             for page in pdf.pages:
                 raw_text = page.extract_text() or ""
+                full_text += raw_text + "\n"
+
                 compact_text = re.sub(r"(?<=\b[A-Z0-9])\s+(?=[A-Z0-9]\b)", "", raw_text.upper())
                 lines = [l.strip() for l in compact_text.split("\n") if l.strip()]
 
@@ -218,10 +219,25 @@ def parse_pdf_invoice(pdf_file, df_manifest):
                                 qty = _extract_quantity_from_line(line)
                                 if qty is not None:
                                     contributions.setdefault(part_name, {})[sub_code] = qty
+
+            # Extract Header Metadata from Invoice
+            trailer_match = re.search(r"TRAILER\s+CAR\s+NO\.?[:\s]*([A-Z0-9-]+)", full_text, re.IGNORECASE)
+            if trailer_match:
+                metadata["Trailer Car No."] = trailer_match.group(1).strip()
+
+            ship_date_match = re.search(r"SHIP\s+DATE[:\s]*(\d{2}/\d{2}/\d{4})", full_text, re.IGNORECASE)
+            if ship_date_match:
+                metadata["Ship Date"] = ship_date_match.group(1).strip()
+
+            bol_match = re.search(r"BOL[:\s]*(\d+)", full_text, re.IGNORECASE)
+            if bol_match:
+                metadata["BOL"] = bol_match.group(1).strip()
+
     except Exception:
         pass
 
-    return {part_name: sum(sub_qtys.values()) for part_name, sub_qtys in contributions.items()}
+    counts = {part_name: sum(sub_qtys.values()) for part_name, sub_qtys in contributions.items()}
+    return counts, metadata
 
 
 def pack_truck_realistically(containers_list, min_container_length=None, min_container_width=None):
@@ -506,29 +522,59 @@ if uploaded_pdfs:
         batch_summary_list = []
         
         for pdf_file in uploaded_pdfs:
-            extracted_counts = parse_pdf_invoice(pdf_file, df_manifest)
+            extracted_counts, meta = parse_pdf_invoice(pdf_file, df_manifest)
             temp_quantities_df = pd.DataFrame({
                 "PartName": df_manifest["PartName"],
                 "PartQuantity": [extracted_counts.get(p, 0) for p in df_manifest["PartName"]]
             })
             
             stats = evaluate_manifest_data(temp_quantities_df)
+            
+            row_data = {
+                "Invoice Name": pdf_file.name,
+                "Trailer Car No.": meta["Trailer Car No."],
+                "Ship Date": meta["Ship Date"],
+                "BOL": meta["BOL"],
+            }
+            
             if stats:
-                row_data = {"Invoice Name": pdf_file.name}
-                row_data.update({k: v for k, v in stats.items() if k not in ["packed_items", "containers_to_pack", "fill_percentage", "active_min_length", "active_min_width"]})
-                batch_summary_list.append(row_data)
+                # Include calculated metrics except for 'Weight Capacity (kg)' and internal objects
+                excluded_keys = [
+                    "packed_items",
+                    "containers_to_pack",
+                    "fill_percentage",
+                    "active_min_length",
+                    "active_min_width",
+                    "Weight Capacity (kg)",
+                ]
+                row_data.update({k: v for k, v in stats.items() if k not in excluded_keys})
             else:
-                batch_summary_list.append({
-                    "Invoice Name": pdf_file.name,
-                    "Trailer Status": "NO MATCHING PARTS FOUND"
+                row_data.update({
+                    "Total Containers": 0,
+                    "Packed Containers": 0,
+                    "Unpacked Containers": 0,
+                    "Gross Weight (kg)": 0.0,
+                    "Weight Margin (kg)": 0.0,
+                    "Weight Usage (%)": 0.0,
+                    "Space Usage (%)": 0.0,
+                    "Trailer Status": "NO MATCHING PARTS FOUND",
                 })
+            
+            batch_summary_list.append(row_data)
 
         summary_df = pd.DataFrame(batch_summary_list)
 
-        # Generate Excel buffer
+        # Generate Excel buffer and apply auto-fit column widths
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
             summary_df.to_excel(writer, index=False, sheet_name="Invoice Comparison")
+            worksheet = writer.sheets["Invoice Comparison"]
+            
+            # Auto-expand columns to fit full header and cell content text
+            for col in worksheet.columns:
+                max_len = max(len(str(cell.value or "")) for cell in col)
+                col_letter = col[0].column_letter
+                worksheet.column_dimensions[col_letter].width = max(max_len + 4, 12)
         
         excel_data = excel_buffer.getvalue()
 
@@ -547,7 +593,7 @@ if uploaded_pdfs:
     
     if st.sidebar.button("Load Selected into Table"):
         target_file = next(f for f in uploaded_pdfs if f.name == selected_pdf_to_view)
-        extracted = parse_pdf_invoice(target_file, df_manifest)
+        extracted, _ = parse_pdf_invoice(target_file, df_manifest)
         st.session_state.quantities_df["PartQuantity"] = [extracted.get(p, 0) for p in df_manifest["PartName"]]
         st.session_state.editor_key += 1
         st.rerun()
