@@ -223,8 +223,13 @@ def parse_pdf_invoice(pdf_file, df_manifest):
             # Extract Header Metadata from Invoice
             trailer_match = re.search(r"TRAILER\s+CAR\s+NO\.?[:\s]*([A-Z0-9-]+)", full_text, re.IGNORECASE)
             if trailer_match:
-                metadata["Trailer Car No."] = trailer_match.group(1).strip()
-
+                parsed_val = trailer_match.group(1).strip().upper()
+                if parsed_val not in ["CAR", "NO", "CAR NO", "NO."]:
+                    metadata["Trailer Car No."] = parsed_val
+                else:
+                    metadata["Trailer Car No."] = "BLANK"
+            else:
+                metadata["Trailer Car No."] = "BLANK"
             ship_date_match = re.search(r"SHIP\s+DATE[:\s]*(\d{2}/\d{2}/\d{4})", full_text, re.IGNORECASE)
             if ship_date_match:
                 metadata["Ship Date"] = ship_date_match.group(1).strip()
