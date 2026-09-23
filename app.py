@@ -553,8 +553,6 @@ if uploaded_pdfs:
             else:
                 row_data.update({
                     "Total Containers": 0,
-                    "Packed Containers": 0,
-                    "Unpacked Containers": 0,
                     "Gross Weight (kg)": 0.0,
                     "Weight Margin (kg)": 0.0,
                     "Weight Usage (%)": 0.0,
